@@ -28,8 +28,9 @@ Miner Dash 1.0.1 remains a beta prerelease for community testing.
 - Existing installations are not backfilled, and deleted starter farms remain
   deleted.
 - Fixes Windows service setup for both fresh installs and reinstalls by
-  reconfiguring an existing service in place and reporting service-control
-  failures directly.
+  creating fresh services through PowerShell, reconfiguring existing services
+  through the Windows service API, and reporting service-control failures
+  directly.
 
 ## Beta notice
 
