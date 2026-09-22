@@ -31,6 +31,8 @@ Miner Dash 1.0.1 remains a beta prerelease for community testing.
   creating fresh services through PowerShell, reconfiguring existing services
   through the Windows service API, and reporting service-control failures
   directly.
+- Fixes optional Cloudflare Tunnel setup on PCs with a broken Microsoft Store
+  Winget source by selecting the `winget` community source explicitly.
 
 ## Beta notice
 
