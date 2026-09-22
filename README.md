@@ -28,8 +28,10 @@ Before flashing or installing:
 - Back up anything important on the target USB drive or internal disk.
 - Verify downloads against the published SHA-256 files.
 - Expect beta defects and report reproducible issues through GitHub Issues.
-- Do not expose the controller directly to the internet. Use the included
-  owner-specific Cloudflare tunnel setup or another authenticated private
-  access method.
+- The controller PC can remain connected to the internet normally. Do **not**
+  configure router port forwarding that exposes Miner Dash TCP port `8443`
+  directly to the public internet. For access while away from home, use the
+  included owner-specific Cloudflare Tunnel setup or another authenticated
+  private-access method.
 
 Miner Dash does not include a mandatory mining fee.
