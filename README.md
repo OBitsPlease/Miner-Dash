@@ -5,9 +5,13 @@ system. It is designed to manage rigs without requiring Hive OS.
 
 ## Beta testing
 
-The current beta is intended for testers. Download the Windows installer and
-Rig OS image from the repository's
-[Releases](https://github.com/OBitsPlease/Miner-Dash/releases) page.
+The current beta is intended for testers.
+
+### Downloads
+
+- **[Download Miner Dash for Windows](https://github.com/OBitsPlease/Miner-Dash/releases/download/v0.2.0-beta.1/miningdash-windows-installer.zip)**
+- **[Download the Miner Dash Rig OS USB image](https://github.com/OBitsPlease/Miner-Dash/releases/download/v0.2.0-beta.1/minerdash-rig-os.img.xz)**
+- [View the complete release and checksums](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v0.2.0-beta.1)
 
 The Windows installer creates a new local controller with unique credentials
 and an empty database. The Rig OS image can run persistently from a USB drive or
