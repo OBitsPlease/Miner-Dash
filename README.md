@@ -9,8 +9,8 @@ The current beta is intended for testers.
 
 ### Downloads
 
-- **[Download Miner Dash for Windows](https://github.com/OBitsPlease/Miner-Dash/releases/download/v0.2.0-beta.3/miningdash-windows-installer.zip)**
-- [View the complete release and checksums](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v0.2.0-beta.3)
+- **[Download Miner Dash for Windows](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.1/miningdash-windows-installer.zip)**
+- [View the complete release and checksums](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.1)
 
 The Windows installer creates a new local controller with unique credentials
 and an empty database. The Rig OS image can run persistently from a USB drive or
