@@ -27,6 +27,9 @@ Miner Dash 1.0.1 remains a beta prerelease for community testing.
 - Adds starter GPU Farm and CPU Farm groups to help new users organize rigs.
 - Existing installations are not backfilled, and deleted starter farms remain
   deleted.
+- Fixes Windows service setup for both fresh installs and reinstalls by
+  reconfiguring an existing service in place and reporting service-control
+  failures directly.
 
 ## Beta notice
 
