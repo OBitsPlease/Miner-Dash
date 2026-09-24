@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Miner Dash</title>
+  <link rel="icon" href="/miningdash-icon.png" type="image/png">
+  <link rel="stylesheet" href="/style.css?v=70">
+</head>
+<body>
+  <section id="login" class="login-shell">
+    <form id="token-form" class="login-card">
+      <div class="login-branding">
+        <img class="login-logo" src="/miningdash-logo.png" alt="Miner Dash">
+        <h1>Miner Dash</h1>
+        <p class="login-tagline">Speed <span>|</span> Efficiency <span>|</span> Metrics</p>
+        <p class="login-byline">By BitsPleaseYT</p>
+      </div>
+      <label>Administrator token<input id="token" type="password" autocomplete="off"></label>
+      <div class="login-divider"><span>or local account</span></div>
+      <label>Username<input id="username" autocomplete="username"></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password"></label>
+      <button type="button" id="forgot-password" class="login-link">Forgot password?</button>
+      <button>Open dashboard</button>
+      <span id="login-error" class="error"></span>
+    </form>
+  </section>
+
+  <dialog id="password-recovery-dialog">
+    <form id="password-recovery-form">
+      <div class="dialog-heading"><div><h2>Reset password</h2><p>Use the offline recovery code saved by your Miner Dash administrator.</p></div><button type="button" id="close-password-recovery" class="icon">×</button></div>
+      <div class="form-grid">
+        <label class="wide">Username<input name="username" autocomplete="username" required></label>
+        <label class="wide">Recovery code<input name="recovery_code" autocomplete="off" required></label>
+        <label>New password<input name="new_password" type="password" minlength="12" autocomplete="new-password" required></label>
+        <label>Confirm password<input name="confirm_password" type="password" minlength="12" autocomplete="new-password" required></label>
+      </div>
+      <span id="password-recovery-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-password-recovery" class="secondary">Cancel</button><button type="submit">Reset password</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="custom-miner-builder-dialog">
+    <form id="custom-miner-builder-form">
+      <div class="dialog-heading"><div><h2>Build a custom miner</h2><p>Create reusable Miner Dash software from a Linux executable or complete package.</p></div><button type="button" id="close-custom-miner-builder" class="icon">×</button></div>
+      <div class="form-grid">
+        <label>Miner name<input name="name" placeholder="My custom miner" required></label>
+        <label>Version<input name="version" placeholder="1.0"></label>
+        <label>Hash algorithm<input name="algorithm" placeholder="randomx" required></label>
+        <label>Package type<select name="package_format"><option value="binary">Self-contained executable</option><option value="tar.gz">Complete .tar.gz bundle</option></select></label>
+        <label>Executable name<input name="binary_name" placeholder="miner" required></label>
+        <label class="bundle-field hidden">Entry point inside archive<input name="entry_point" placeholder="miner-folder/miner"></label>
+        <label class="wide">Installation URL<input name="url" type="url" placeholder="https://github.com/project/releases/download/version/miner.tar.gz"></label>
+        <label class="wide">Or upload package<input name="binary_file" type="file"></label>
+        <label class="wide">Launch arguments<textarea name="default_arguments" placeholder="One argument per line&#10;--pool&#10;{POOL}&#10;--wallet&#10;{WALLET}.{WORKER}"></textarea></label>
+        <label class="wide bundle-field hidden">Environment variables<textarea name="environment" placeholder="LD_LIBRARY_PATH=./lib&#10;GPU_MAX_ALLOC_PERCENT=100"></textarea></label>
+        <label class="bundle-field hidden">Statistics format<select name="stats_type"><option value="">None</option><option value="xmrig">XMRig</option><option value="miniz">miniZ</option><option value="srbminer">SRBMiner</option></select></label>
+        <label class="bundle-field hidden">Local statistics URL<input name="stats_url" type="url" placeholder="http://127.0.0.1:21550/"></label>
+        <p class="field-help wide">Choose either one HTTPS URL or one local file. Bundle mode safely preserves regular files and directories, rejects links and unsafe paths, verifies the selected entry point, and never runs third-party installer or callback scripts. Available placeholders: {POOL}, {POOL_ENDPOINT}, {WALLET}, {WORKER}, {PASSWORD}, {COIN}, and {ALGORITHM}.</p>
+      </div>
+      <span id="custom-miner-builder-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-custom-miner-builder" class="secondary">Cancel</button><button type="submit">Create custom miner</button></div>
+    </form>
+  </dialog>
+
+  <div id="application" class="app hidden">
+    <button id="nav-toggle" class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-navigation" aria-label="Open navigation"><span></span><span></span><span></span></button>
+    <aside>
+      <div class="brand"><img class="brand-mark" src="/miningdash-icon.png" alt=""><strong>Miner Dash</strong></div>
+      <nav id="primary-navigation">
+        <button class="nav nav-primary-link active" data-view="workers"><span>▦</span> Overview</button>
+
+        <div class="nav-group" data-nav-group="farms">
+          <button class="nav-group-trigger" type="button" aria-expanded="false" aria-controls="farms-navigation">
+            <span class="nav-group-icon">⌂</span><span>Farms</span><i aria-hidden="true"></i>
+          </button>
+          <section id="farms-navigation" class="nav-flyout nav-farm-flyout" aria-label="Farms">
+            <div class="nav-flyout-heading"><div><strong>Choose a farm</strong><small>Open a farm and see its rigs</small></div><button class="nav nav-all-farms" data-view="farms"><span>⌂</span> All farms</button></div>
+            <div id="nav-farm-list" class="nav-farm-list"></div>
+          </section>
+        </div>
+
+        <div class="nav-group" data-nav-group="mining">
+          <button class="nav-group-trigger" type="button" aria-expanded="false" aria-controls="mining-navigation">
+            <span class="nav-group-icon">◆</span><span>Mining</span><i aria-hidden="true"></i>
+          </button>
+          <section id="mining-navigation" class="nav-flyout" aria-label="Mining">
+            <div class="nav-flyout-heading"><div><strong>Mining</strong><small>Workloads and reusable mining setup</small></div></div>
+            <div class="nav-page-grid">
+              <button class="nav nav-page-tile" data-view="gpu-mining"><span>◆</span><span><strong>GPU Mining</strong><small>Graphics card workloads</small></span></button>
+              <button class="nav nav-page-tile" data-view="cpu-mining"><span>●</span><span><strong>CPU Mining</strong><small>Processor workloads</small></span></button>
+              <button class="nav nav-page-tile" data-view="flight-sheets"><span>✈</span><span><strong>Flight Sheets</strong><small>Coin and miner assignments</small></span></button>
+              <button class="nav nav-page-tile" data-view="wallets"><span>◈</span><span><strong>Wallets</strong><small>Public payout addresses</small></span></button>
+              <button class="nav nav-page-tile" data-view="mining-software"><span>▱</span><span><strong>Mining Software</strong><small>Supported miner catalog</small></span><b class="miner-update-count hidden"></b></button>
+              <button class="nav nav-page-tile" data-view="pools"><span>≋</span><span><strong>Mining Pools</strong><small>Approved pool endpoints</small></span></button>
+              <button class="nav nav-page-tile" data-view="custom-miners"><span>⌘</span><span><strong>Custom Miner Lab</strong><small>Build custom packages</small></span></button>
+            </div>
+          </section>
+        </div>
+
+        <div class="nav-group" data-nav-group="operations">
+          <button class="nav-group-trigger" type="button" aria-expanded="false" aria-controls="operations-navigation">
+            <span class="nav-group-icon">◷</span><span>Operations</span><i aria-hidden="true"></i>
+          </button>
+          <section id="operations-navigation" class="nav-flyout" aria-label="Operations">
+            <div class="nav-flyout-heading"><div><strong>Operations</strong><small>Automation and controller events</small></div></div>
+            <div class="nav-page-grid">
+              <button class="nav nav-page-tile" data-view="schedules"><span>◷</span><span><strong>Schedules</strong><small>Automated actions</small></span></button>
+              <button class="nav nav-page-tile" data-view="alerts"><span>!</span><span><strong>Alerts</strong><small>Health and mining issues</small></span></button>
+              <button class="nav nav-page-tile" data-view="activity"><span>≡</span><span><strong>Activity</strong><small>Security and change history</small></span></button>
+            </div>
+          </section>
+        </div>
+
+        <div class="nav-group" data-nav-group="discover">
+          <button class="nav-group-trigger" type="button" aria-expanded="false" aria-controls="discover-navigation">
+            <span class="nav-group-icon">⚡</span><span>Discover</span><i aria-hidden="true"></i>
+          </button>
+          <section id="discover-navigation" class="nav-flyout" aria-label="Discover">
+            <div class="nav-flyout-heading"><div><strong>Discover</strong><small>Find profitable and new opportunities</small></div></div>
+            <div class="nav-page-grid">
+              <button class="nav nav-page-tile" data-view="power-prices"><span>⚡</span><span><strong>Power &amp; Prices</strong><small>Profitability by power cost</small></span></button>
+              <button class="nav nav-page-tile" data-view="new-coins"><span>◉</span><span><strong>New Coin</strong><small>Recently launched PoW coins</small></span></button>
+            </div>
+          </section>
+        </div>
+
+        <div class="nav-group" data-nav-group="system">
+          <button class="nav-group-trigger" type="button" aria-expanded="false" aria-controls="system-navigation">
+            <span class="nav-group-icon">⚙</span><span>System</span><i aria-hidden="true"></i>
+          </button>
+          <section id="system-navigation" class="nav-flyout" aria-label="System">
+            <div class="nav-flyout-heading"><div><strong>System</strong><small>Rig setup and administration</small></div></div>
+            <div class="nav-page-grid">
+              <button class="nav nav-page-tile" data-view="rig-os"><span>▣</span><span><strong>Rig OS &amp; USB</strong><small>Build and pair new rigs</small></span><b class="miner-update-count hidden"></b></button>
+              <button class="nav nav-page-tile" data-view="users"><span>♙</span><span><strong>Users</strong><small>Access and permissions</small></span></button>
+              <button class="nav nav-page-tile" data-view="miners"><span>◆</span><span><strong>Miner Packages</strong><small>Advanced definitions</small></span></button>
+              <button class="nav nav-page-tile" data-view="overclocks"><span>ϟ</span><span><strong>Overclocking</strong><small>Reusable tuning profiles</small></span></button>
+            </div>
+          </section>
+        </div>
+      </nav>
+      <span id="running-version" class="running-version">v1.0.2</span>
+      <div class="connection"><i></i><span>Local controller</span></div>
+    </aside>
+
+    <main>
+      <header>
+        <div class="page-heading">
+          <div id="mining-switcher" class="mining-switcher hidden">
+            <label>Workspace<select id="mining-workspace-select"><option value="cpu-mining">CPU Mining</option><option value="gpu-mining">GPU Mining</option></select></label>
+            <label>Worker<select id="mining-worker-select"></select></label>
+          </div>
+          <h1 id="page-title">Workers</h1><p id="page-subtitle">Live farm status and controls</p>
+        </div>
+        <div class="header-actions">
+          <button id="system-update-control" class="system-update-control secondary" type="button" aria-label="Check for Miner Dash updates" title="Miner Dash is up to date">
+            <span aria-hidden="true">↻</span>
+          </button>
+          <span id="last-update"></span>
+          <button id="refresh" class="secondary">Refresh</button>
+          <button id="logout" class="secondary">Lock</button>
+        </div>
+      </header>
+      <div id="notice" class="notice hidden"></div>
+
+      <section id="workers-view" class="view">
+        <div id="overview-stats" class="stats"></div>
+        <div class="section-heading">
+          <div><h2>Workers</h2><p>CPU and GPU rigs registered with this controller</p></div>
+        </div>
+        <div id="rig-groups" class="rig-groups"></div>
+      </section>
+
+      <section id="resource-view" class="view hidden">
+        <div class="resource-toolbar">
+          <button id="create-resource">Add new</button>
+        </div>
+        <div id="resource-content" class="table-card"></div>
+      </section>
+
+      <section id="rig-os-view" class="view hidden">
+        <div id="rig-os-content"></div>
+      </section>
+
+      <section id="feature-view" class="view hidden">
+        <div id="feature-content"></div>
+      </section>
+
+      <section id="custom-miners-view" class="view hidden">
+        <div id="custom-miners-content"></div>
+      </section>
+
+      <section id="mining-view" class="view hidden">
+        <div id="mining-content"></div>
+      </section>
+
+      <footer class="app-footer">
+        <span>Created by BitsPleaseYT</span>
+        <a href="https://discord.gg/4t9rBwhTw" target="_blank" rel="noreferrer" aria-label="Join the Miner Dash Discord community">
+          <svg class="discord-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7.2 6.7A14 14 0 0 1 12 5.9a14 14 0 0 1 4.8.8c1.5 2.1 2.3 4.4 2.2 6.8a10 10 0 0 1-3.1 2.1l-.8-1.1c.6-.2 1.1-.5 1.6-.8a9.3 9.3 0 0 1-9.4 0c.5.3 1 .6 1.6.8l-.8 1.1A10 10 0 0 1 5 13.5c-.1-2.4.7-4.7 2.2-6.8Zm2.2 5.9c.7 0 1.2-.6 1.2-1.3S10.1 10 9.4 10s-1.2.6-1.2 1.3.5 1.3 1.2 1.3Zm5.2 0c.7 0 1.2-.6 1.2-1.3S15.3 10 14.6 10s-1.2.6-1.2 1.3.5 1.3 1.2 1.3Z"/>
+          </svg>
+          <span>Questions, issues, and feature ideas</span>
+        </a>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="resource-dialog">
+    <form id="resource-form" method="dialog">
+      <div class="dialog-heading"><div><h2 id="dialog-title">Add resource</h2><p id="dialog-help"></p></div><button type="button" id="close-dialog" class="icon">×</button></div>
+      <div id="flight-sheet-editor-tabs" class="editor-tabs hidden">
+        <button type="button" class="editor-tab active" data-editor-pane="basic">Basic setup</button>
+        <button type="button" class="editor-tab" data-editor-pane="detailed">Detailed miner config</button>
+      </div>
+      <div id="resource-fields" class="form-grid"></div>
+      <div id="resource-detailed-fields" class="form-grid hidden"></div>
+      <span id="form-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="delete-dialog-resource" class="danger delete-dialog-resource hidden">Delete flight sheet</button><button type="button" id="cancel-dialog" class="secondary">Cancel</button><button type="submit">Save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="quick-sheet-dialog" class="quick-sheet-dialog">
+    <form id="quick-sheet-form">
+      <div class="dialog-heading"><div><h2 id="quick-sheet-title">New mining setup</h2><p>Wallet, pool, software, and workers—all in one place.</p></div><button type="button" id="close-quick-sheet" class="icon">×</button></div>
+      <input id="quick-device-type" name="device_type" type="hidden">
+      <div class="setup-steps">
+        <fieldset>
+          <legend><span>1</span> Coin and wallet</legend>
+          <div class="form-grid">
+            <label>Setup name<input name="name" placeholder="ZCL GPU - Main Pool" required></label>
+            <label>Coin<span class="coin-input"><span class="coin-preview"></span><input name="coin" list="coin-options" placeholder="Choose or type a ticker" required></span></label>
+            <label class="wide">Wallet<select name="wallet_choice"></select><input name="wallet_address" list="wallet-options" placeholder="Public payout address (never a seed phrase)" required></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend><span>2</span> Pool</legend>
+          <div class="form-grid">
+            <label class="wide">Pool<select name="pool_choice"></select><input name="pool_url" list="pool-options" placeholder="stratum+tcp://pool.example.com:3333" required></label>
+            <label>Pool password<input name="pool_password" value="x"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend><span>3</span> Mining software</legend>
+          <div class="form-grid">
+            <label>Miner<select name="miner_choice" required></select></label>
+            <label>Algorithm<input name="algorithm" placeholder="e.g. randomx or equihash192_7" required></label>
+            <p id="quick-miner-help" class="field-help wide"></p>
+            <div id="custom-miner-fields" class="form-grid wide hidden">
+              <label>Custom miner name<input name="custom_name" placeholder="My new miner"></label>
+              <label>Executable name<input name="custom_binary_name" placeholder="miner"></label>
+              <label class="wide">HTTPS install link<input name="custom_url" type="url" placeholder="https://github.com/project/releases/download/version/miner.tar.gz"></label>
+              <label>Version<input name="custom_version" placeholder="optional"></label>
+              <label class="wide">Wallet and worker template<input name="custom_wallet_template" value="{WALLET}.{WORKER}" placeholder="{WALLET}.{WORKER}"></label>
+              <label class="wide">Command arguments<textarea name="custom_arguments" placeholder="One argument per line&#10;--pool&#10;{POOL}&#10;--wallet&#10;{WALLET}.{WORKER}"></textarea></label>
+              <p class="field-help wide">Placeholders: {POOL}, {POOL_ENDPOINT}, {WALLET}, {WORKER}, {PASSWORD}, {COIN}, and {ALGORITHM}. Legacy %WAL% and %WORKER_NAME% wallet placeholders are also accepted for easy migration. Direct Linux executable or .tar.gz archive only; installer scripts are never run.</p>
+            </div>
+          </div>
+        </fieldset>
+        <button type="button" id="toggle-dual-workload" class="secondary hidden">+ Add CPU + GPU dual workload</button>
+        <fieldset id="secondary-workload" class="hidden">
+          <legend><span>+</span> Second coin on this rig</legend>
+          <input name="secondary_device_type" type="hidden">
+          <div class="form-grid">
+            <label>Device<input name="secondary_device_label" disabled></label>
+            <label>Coin<span class="coin-input"><span class="coin-preview secondary"></span><input name="secondary_coin" list="coin-options" placeholder="Choose or type a ticker"></span></label>
+            <label class="wide">Wallet<input name="secondary_wallet_address" list="wallet-options" placeholder="Public payout address"></label>
+            <label class="wide">Pool<input name="secondary_pool_url" list="pool-options" placeholder="stratum+tcp://pool.example.com:3333"></label>
+            <label>Pool password<input name="secondary_pool_password" value="x"></label>
+            <label>Algorithm<input name="secondary_algorithm" placeholder="e.g. randomx"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend><span>4</span> Apply to rigs</legend>
+          <label>Workers<select name="rig_ids" multiple></select></label>
+          <p class="field-help">Optional. Select one or more rigs now, or apply this setup later from Workers.</p>
+        </fieldset>
+      </div>
+      <span id="quick-sheet-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-quick-sheet" class="secondary">Cancel</button><button type="submit">Create mining setup</button></div>
+    </form>
+  </dialog>
+
+  <datalist id="coin-options">
+    <option value="BTC"><option value="ETH"><option value="ETC"><option value="RVN">
+    <option value="XMR"><option value="ZCL"><option value="VTC"><option value="YEC">
+    <option value="ERG"><option value="KAS"><option value="ALPH"><option value="QRL">
+  </datalist>
+  <datalist id="wallet-options"></datalist>
+  <datalist id="pool-options"></datalist>
+
+  <dialog id="miner-package-dialog">
+    <form id="miner-package-form">
+      <div class="dialog-heading"><div><h2 id="miner-package-title">Upload miner package</h2><p>Use the official Linux executable. MinerDash calculates and verifies its SHA-256 hash.</p></div><button type="button" id="close-miner-package" class="icon">×</button></div>
+      <input name="miner_id" type="hidden">
+      <div class="form-grid">
+        <label>Version<input name="version" placeholder="e.g. 1.21.0" required></label>
+        <label>Algorithm<input name="algorithm" required></label>
+        <label class="wide">Linux executable<input name="binary_file" type="file" required></label>
+      </div>
+      <p id="miner-package-source" class="field-help"></p>
+      <span id="miner-package-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-miner-package" class="secondary">Cancel</button><button type="submit">Verify and upload</button></div>
+    </form>
+  </dialog>
+
+  <template id="rig-template">
+    <article class="rig-card">
+      <div class="rig-heading">
+        <div class="rig-icon">R</div>
+        <div class="rig-identity"><div class="rig-title-line"><h3></h3><span class="rig-kind"></span></div><p class="rig-meta"></p><div class="gpu-health-strip" aria-label="GPU temperature status"></div></div>
+        <div class="rig-heading-actions">
+          <div class="focused-rig-switcher">
+            <select class="focused-workspace-select" aria-label="Mining workspace"><option value="cpu-mining">CPU Mining</option><option value="gpu-mining">GPU Mining</option></select>
+            <select class="focused-worker-select" aria-label="Worker"></select>
+          </div>
+          <div class="rig-workload-summary hidden"></div>
+          <button class="miner-update-indicator hidden" type="button" aria-label="Miner update status"><img src="/miner-update.png" alt=""></button>
+          <span class="status"></span><button class="close-rig-focus secondary" type="button">Close</button>
+        </div>
+      </div>
+      <div class="rig-tabs" role="tablist" aria-label="Rig details">
+        <button class="rig-tab active" data-rig-tab="overview" type="button">Overview</button>
+        <button class="rig-tab" data-rig-tab="mining" type="button">Mining</button>
+        <button class="rig-tab" data-rig-tab="stats" type="button">Stats</button>
+        <button class="rig-tab" data-rig-tab="settings" type="button">Settings</button>
+      </div>
+      <section class="rig-panel rig-overview-panel" data-rig-panel="overview">
+        <div class="rig-metrics"></div>
+        <section class="coin-price-card"></section>
+        <div class="gpu-list"></div>
+        <div class="system-detail-grid"></div>
+      </section>
+      <section class="rig-panel rig-mining-panel" data-rig-panel="mining">
+        <div class="miner-row"></div>
+        <section class="pool-health"></section>
+        <section class="pool-performance"></section>
+        <div class="miner-links">
+          <button class="miner-screen secondary" data-action="logs">Miner screen</button>
+          <a class="button-link pool-link secondary" target="_blank" rel="noopener noreferrer">View at pool</a>
+          <button data-action="restart" class="secondary">Restart miner</button>
+          <button data-action="stop" class="danger">Stop miner</button>
+        </div>
+        <p class="miner-screen-message"></p>
+        <section class="miner-screen-panel hidden">
+          <div class="miner-screen-heading"><strong>Miner screen</strong><button class="close-miner-screen secondary">Hide</button></div>
+          <pre class="log-output"></pre>
+        </section>
+      </section>
+      <section class="rig-panel rig-stats-panel" data-rig-panel="stats">
+        <div class="rig-panel-heading stats-panel-heading">
+          <div><span class="eyebrow">TELEMETRY</span><h3>Performance history</h3></div>
+          <div class="history-controls">
+            <button class="history-previous secondary" type="button">Previous</button>
+            <input class="history-date" type="date" aria-label="History end date">
+            <button class="history-next secondary" type="button">Next</button>
+            <div class="history-ranges" aria-label="History range">
+              <button class="history-range active" data-days="1" type="button">1d</button>
+              <button class="history-range" data-days="7" type="button">7d</button>
+              <button class="history-range" data-days="30" type="button">1mo</button>
+            </div>
+            <button class="history-download secondary" type="button" aria-label="Download charts" title="Download charts as SVG" disabled>↓</button>
+            <button class="history-button secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="history-chart"><div class="empty simple-empty">Load history to inspect CPU or per-GPU performance trends.</div></div>
+      </section>
+      <section class="rig-panel rig-settings-panel" data-rig-panel="settings">
+        <div class="rig-panel-heading"><div><span class="eyebrow">WORKER CONTROL</span><h3>Configuration and safety</h3></div></div>
+        <section class="driver-panel hidden">
+          <div class="driver-panel-heading"><div><span class="eyebrow">GPU SOFTWARE</span><h3>Drivers and firmware</h3></div><span>Rig-wide by vendor</span></div>
+          <div class="driver-inventory"></div>
+          <p>Versions are shown per GPU. Driver updates affect every GPU of the selected vendor, stop mining, use stable Ubuntu packages, and require a separate reboot.</p>
+        </section>
+        <div class="assignment-form">
+          <label>Worker name<input class="worker-name"></label>
+          <label>Farm<select class="farm-select"></select></label>
+          <label>Flight sheet<select class="flight-select"></select></label>
+          <label>Overclock profile<select class="oc-select"></select></label>
+          <label>Fixed wall estimate W<input class="estimated-power" type="number" min="0" max="100000" step="0.01" placeholder="CPU rigs"></label>
+          <label>System overhead W<input class="power-offset" type="number" min="0" max="100000" step="0.01" placeholder="Added to GPU sensors"></label>
+          <button class="gpu-tuning secondary"><span aria-hidden="true">&#9881;</span> GPU overclocks</button>
+          <button class="smart-tune">Smart Tune GPUs</button>
+          <button class="stop-smart-tune danger hidden">Stop smart tune</button>
+          <label>Tags<input class="tags" placeholder="spec, basement"></label>
+          <label>Max temperature °C<input class="max-temp" type="number" min="0" max="110"></label>
+          <label>Minimum hashrate<input class="min-hash" type="number" min="0" step="any"></label>
+          <label>Restart delay seconds<input class="restart-delay" type="number" min="10"></label>
+          <label>Reboot after failures<input class="reboot-failures" type="number" min="0"></label>
+          <label>Autofan target °C<input class="fan-target" type="number" min="0" max="100"></label>
+          <label>Autofan minimum %<input class="fan-min" type="number" min="0" max="100"></label>
+          <label>Autofan maximum %<input class="fan-max" type="number" min="0" max="100"></label>
+          <button class="save-assignment">Apply configuration</button>
+        </div>
+        <div class="smart-tune-status hidden"></div>
+        <div class="worker-actions">
+          <button data-action="reboot" class="danger">Reboot rig</button>
+          <button class="remove-worker danger">Remove worker</button>
+        </div>
+        <p class="message"></p>
+      </section>
+    </article>
+  </template>
+
+  <dialog id="gpu-tuning-dialog" class="quick-sheet-dialog">
+    <form id="gpu-tuning-form">
+      <div class="dialog-heading"><div><h2><span aria-hidden="true">&#9881;</span> GPU overclocks</h2><p>Adjust every GPU or import a measured preset.</p></div><button type="button" id="close-gpu-tuning" class="icon">×</button></div>
+      <input name="rig_id" type="hidden">
+      <div class="gpu-tuning-tabs" role="tablist">
+        <button type="button" class="gpu-tuning-tab active" data-tuning-pane="manual">Adjust GPUs</button>
+        <button type="button" class="gpu-tuning-tab" data-tuning-pane="presets">Knowledge presets</button>
+      </div>
+      <div data-tuning-panel="manual">
+        <button type="button" id="copy-first-gpu-tuning" class="secondary">Copy GPU 0 settings to all GPUs</button>
+        <div id="gpu-tuning-rows" class="gpu-tuning-rows"></div>
+      </div>
+      <div id="gpu-preset-rows" class="gpu-preset-rows hidden" data-tuning-panel="presets"></div>
+      <span id="gpu-tuning-error" class="error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-gpu-tuning" class="secondary">Cancel</button><button type="submit">Apply GPU tuning</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="miner-update-dialog" class="miner-update-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div class="update-dialog-title"><img src="/miner-update.png" alt=""><div><h2>Miner update</h2><p class="miner-update-version"></p></div></div><button type="button" id="close-miner-update" class="icon">×</button></div>
+      <div class="miner-update-rig"></div>
+      <h3>What is included</h3>
+      <pre class="miner-release-notes"></pre>
+      <a class="button-link secondary miner-release-link" target="_blank" rel="noreferrer">Open official release</a>
+      <span class="miner-update-error error"></span>
+      <div class="dialog-actions"><button type="button" id="cancel-miner-update" class="secondary">Cancel</button><button type="button" id="apply-miner-update">Update</button></div>
+    </form>
+  </dialog>
+
+  <script src="/app.js?v=70"></script>
+</body>
+</html>

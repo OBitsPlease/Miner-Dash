@@ -1,0 +1,45 @@
+#!/usr/sbin/nft -f
+# Replace every @TOKEN@ through configure-firewall.sh; never deploy this file
+# directly. Keep the console available when first applying policy.
+flush ruleset
+
+table inet minerdash {
+  set controller_v4 {
+    type ipv4_addr
+    elements = { @CONTROLLER_IPV4@ }
+  }
+  set management_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { @MANAGEMENT_CIDR@ }
+  }
+  set pool_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { @POOL_CIDRS@ }
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+    ct state established,related accept
+    iifname "lo" accept
+    ip saddr @management_v4 tcp dport 22 accept
+    ip protocol icmp accept
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority filter; policy drop;
+    ct state established,related accept
+    oifname "lo" accept
+    ip daddr @controller_v4 tcp dport @CONTROLLER_PORT@ accept
+    ip daddr @pool_v4 tcp dport @POOL_PORTS@ accept
+    udp dport 53 ip daddr @DNS_IPV4@ accept
+    udp dport 123 ip daddr @NTP_IPV4@ accept
+    # DHCP renewals (remove when rigs use static addressing).
+    udp sport 68 udp dport 67 accept
+  }
+}

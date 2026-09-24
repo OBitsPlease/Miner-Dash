@@ -1,0 +1,47 @@
+[Unit]
+Description=MinerDash rig agent
+Documentation=file:/usr/share/doc/minerdash-linux/OPERATIONS.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+ConditionFileIsExecutable=/opt/minerdash/agent/current/minerdash-agent
+ConditionPathExists=/etc/minerdash/agent.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+LogNamespace=minerdash
+ExecStart=/usr/local/sbin/minerdash-agent-launcher -config /etc/minerdash/agent.json
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+KillMode=mixed
+
+# Root is required for the agent's explicitly supported GPU and power actions.
+# These controls still prevent gaining new privilege and hide unrelated state.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=no
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/minerdash /opt/minerdash/agent /opt/minerdash/miners /sys/class/drm
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,1 @@
+minerdash ALL=(root) NOPASSWD: /usr/local/sbin/minerdash-enroll-console, /usr/local/sbin/minerdash-install-to-disk, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff

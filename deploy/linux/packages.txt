@@ -1,0 +1,7 @@
+# Ubuntu 24.04 package manifest. One package per line; installed from configured,
+# signed Ubuntu APT repositories by install.sh.
+ca-certificates
+jq
+nftables
+pciutils
+ubuntu-drivers-common

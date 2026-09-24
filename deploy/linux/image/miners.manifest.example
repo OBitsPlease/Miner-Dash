@@ -1,0 +1,4 @@
+# SHA256 followed by a path relative to the operator-supplied miners directory.
+# Blank lines and comments are ignored. Paths may not contain spaces or "..".
+# MinerDash never downloads these files; the builder verifies and copies them.
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  example-miner/example-miner

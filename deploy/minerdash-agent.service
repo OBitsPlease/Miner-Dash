@@ -1,0 +1,17 @@
+[Unit]
+Description=MinerDash Rig Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/minerdash-agent -config /etc/minerdash/agent.json
+Restart=always
+RestartSec=5
+User=root
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

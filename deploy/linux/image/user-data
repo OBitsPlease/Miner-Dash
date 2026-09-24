@@ -1,0 +1,20 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - jq
+  - nftables
+  - pciutils
+  - ubuntu-drivers-common
+write_files:
+  - path: /etc/minerdash/IMAGE-NOT-ENROLLED
+    owner: root:root
+    permissions: '0600'
+    content: |
+      This template intentionally contains no agent identity or enrollment secret.
+runcmd:
+  - [mkdir, -p, /etc/minerdash, /var/lib/minerdash, /opt/minerdash/miners]
+  - [chmod, '0700', /etc/minerdash, /var/lib/minerdash, /opt/minerdash/miners]
+  - [sh, -c, "systemctl disable --now minerdash-agent.service 2>/dev/null || true"]
+final_message: "MinerDash base image ready; install and enroll the agent per rig."

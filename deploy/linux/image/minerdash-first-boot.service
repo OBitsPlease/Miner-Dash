@@ -1,0 +1,15 @@
+[Unit]
+Description=Create unique MinerDash rig identity on first boot
+Wants=network-online.target
+After=local-fs.target network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minerdash-first-boot-identity
+Restart=on-failure
+RestartSec=15s
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# Packages needed only on the image-building host.
+ca-certificates
+cloud-image-utils
+jq
+libguestfs-tools
+qemu-utils
+xz-utils

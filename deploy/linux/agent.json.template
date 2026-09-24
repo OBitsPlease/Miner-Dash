@@ -1,0 +1,8 @@
+{
+  "controller": "https://CONTROLLER_HOST:8443",
+  "tls_fingerprint": "SHA256_HEX_WITHOUT_COLONS",
+  "name": "RIG_NAME",
+  "state_file": "/var/lib/minerdash/identity.json",
+  "package_dir": "/opt/minerdash/miners",
+  "profiles": {}
+}

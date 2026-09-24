@@ -1,0 +1,28 @@
+{
+  "controller": "https://controller.example:8443",
+  "tls_fingerprint": "REPLACE_WITH_CONTROLLER_CERTIFICATE_SHA256",
+  "enrollment_token": "REPLACE_WITH_ENROLLMENT_TOKEN",
+  "name": "rig-01",
+  "state_file": "/var/lib/minerdash/identity.json",
+  "package_dir": "/opt/minerdash/miners",
+  "profiles": {
+    "qrl": {
+      "command": "/opt/minerdash/miners/qrl-miner/qrl-miner",
+      "args": [
+        "--config",
+        "/etc/minerdash/miners/qrl.json"
+      ],
+      "working_dir": "/opt/minerdash/miners/qrl-miner",
+      "stats_type": "xmrig",
+      "stats_url": "http://127.0.0.1:18080/2/summary"
+    },
+    "zcl": {
+      "command": "/opt/minerdash/miners/zcl-miner/zcl-miner",
+      "args": [
+        "--config",
+        "/etc/minerdash/miners/zcl.json"
+      ],
+      "working_dir": "/opt/minerdash/miners/zcl-miner"
+    }
+  }
+}
