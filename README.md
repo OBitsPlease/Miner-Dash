@@ -9,6 +9,19 @@ MinerDash has no billing, hosted control plane, pool preference, developer
 wallet, or built-in hashrate redirection. Wallet entries are public payout
 addresses only. Never put wallet seed phrases or private keys on a mining rig.
 
+## Install on Windows
+
+No repository clone or command line is required.
+
+1. Download **[MinerDash-Setup-1.0.2.exe](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.2/MinerDash-Setup-1.0.2.exe)**.
+2. Double-click the installer and approve the Windows administrator prompt.
+3. Save the first-login credentials displayed during setup.
+4. Open the **Mining Dash** desktop shortcut.
+
+Miner Dash is currently a beta and the installer is not yet code-signed.
+Windows SmartScreen may require **More info → Run anyway**. Release downloads
+also include SHA-256 checksums so the installer can be verified before use.
+
 ## Platform features
 
 - Farms, workers, tags, and bulk miner actions

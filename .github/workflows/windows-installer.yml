@@ -1,0 +1,128 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the v prefix
+        required: true
+        default: 1.0.2
+        type: string
+      rig_os_release_tag:
+        description: Release tag containing the verified Rig OS artifacts
+        required: true
+        default: v1.0.2
+        type: string
+      publish_to_release:
+        description: Upload the installer to the matching vX.Y.Z release
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-installer-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Validate workflow inputs
+        shell: pwsh
+        run: |
+          if ('${{ inputs.version }}' -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'Version must look like 1.0.2 and must not include the v prefix.'
+          }
+          if ('${{ inputs.rig_os_release_tag }}' -notmatch '^v[0-9A-Za-z._+-]+$') {
+            throw 'Rig OS release tag is invalid.'
+          }
+
+      - name: Download verified Rig OS release inputs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path build\rig-os | Out-Null
+          gh release download '${{ inputs.rig_os_release_tag }}' `
+            --repo '${{ github.repository }}' `
+            --dir build\rig-os `
+            --pattern 'minerdash-rig-os.img.xz' `
+            --pattern 'minerdash-rig-os.img.xz.sha256' `
+            --pattern 'minerdash-rig-os.raw.build-manifest'
+          $expected = ((Get-Content build\rig-os\minerdash-rig-os.img.xz.sha256 -Raw) -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash build\rig-os\minerdash-rig-os.img.xz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$' -or $actual -ne $expected) {
+            throw 'Downloaded Rig OS checksum verification failed.'
+          }
+
+      - name: Build and test release payload
+        shell: pwsh
+        run: |
+          .\scripts\build-release.ps1 -Version '${{ inputs.version }}'
+          Expand-Archive -LiteralPath build\miningdash-windows-installer.zip -DestinationPath build\windows-installer
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile Windows setup wizard
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "Inno Setup compiler was not found at $compiler"
+          }
+          $source = (Resolve-Path build\windows-installer).Path
+          $output = (Resolve-Path build).Path
+          & $compiler `
+            "/DMyAppVersion=${{ inputs.version }}" `
+            "/DSourceDir=$source" `
+            "/DOutputDir=$output" `
+            installer\MinerDash.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Inno Setup compilation failed.'
+          }
+
+      - name: Generate installer checksum
+        shell: pwsh
+        run: |
+          $installer = "build\MinerDash-Setup-${{ inputs.version }}.exe"
+          $checksum = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$checksum  MinerDash-Setup-${{ inputs.version }}.exe" |
+            Set-Content -LiteralPath "$installer.sha256" -Encoding ascii
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinerDash-Setup-${{ inputs.version }}
+          path: |
+            build/MinerDash-Setup-${{ inputs.version }}.exe
+            build/MinerDash-Setup-${{ inputs.version }}.exe.sha256
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish installer to release
+        if: ${{ inputs.publish_to_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v${{ inputs.version }}" `
+            "build\MinerDash-Setup-${{ inputs.version }}.exe" `
+            "build\MinerDash-Setup-${{ inputs.version }}.exe.sha256" `
+            --repo '${{ github.repository }}' `
+            --clobber

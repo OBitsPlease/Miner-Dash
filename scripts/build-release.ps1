@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version = '1.0.2',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\build'),
     [string]$RigOSDirectory = (Join-Path $PSScriptRoot '..\build\rig-os')
 )
 
 $ErrorActionPreference = 'Stop'
-$version = '1.0.2'
-$linkerFlags = "-s -w -X minerdash/internal/buildinfo.Version=$version"
+$linkerFlags = "-s -w -X minerdash/internal/buildinfo.Version=$Version"
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $resolvedRigOSDirectory = Resolve-Path -LiteralPath $RigOSDirectory -ErrorAction Stop
@@ -65,6 +66,7 @@ try {
     Copy-Item -LiteralPath $amd64Artifact -Destination (Join-Path $installerRoot 'build\minerdash-agent-amd64')
     Copy-Item -LiteralPath $arm64Artifact -Destination (Join-Path $installerRoot 'build\minerdash-agent-arm64')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\install-controller.ps1') -Destination (Join-Path $installerRoot 'scripts')
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\install-controller-wizard.ps1') -Destination (Join-Path $installerRoot 'scripts')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\uninstall-controller.ps1') -Destination (Join-Path $installerRoot 'scripts')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\trust-controller-certificate.ps1') -Destination (Join-Path $installerRoot 'scripts')
     Copy-Item -LiteralPath (Join-Path $root 'scripts\setup-cloudflare-tunnel.ps1') -Destination (Join-Path $installerRoot 'scripts')
