@@ -149,8 +149,8 @@ func (s *Store) SaveMiner(value protocol.MinerDefinition) (protocol.MinerDefinit
 			return value, fmt.Errorf("invalid environment variable name %q", name)
 		}
 	}
-	if value.StatsType != "" && value.StatsType != "xmrig" && value.StatsType != "miniz" && value.StatsType != "srbminer" && value.StatsType != "trex" {
-		return value, errors.New("stats_type must be empty, xmrig, miniz, srbminer, or trex")
+	if value.StatsType != "" && value.StatsType != "xmrig" && value.StatsType != "miniz" && value.StatsType != "srbminer" && value.StatsType != "trex" && value.StatsType != "wildrig" {
+		return value, errors.New("stats_type must be empty, xmrig, miniz, srbminer, trex, or wildrig")
 	}
 	if value.StatsType != "" {
 		parsed, err := url.Parse(value.StatsURL)

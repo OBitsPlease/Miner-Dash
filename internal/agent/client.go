@@ -527,6 +527,9 @@ func (c *Client) ensureManagedMiner(ctx context.Context, configuration *protocol
 	if strings.EqualFold(miner.BinaryName, "epic-miner-launch") && profile.StatsType == "" {
 		profile.StatsType = "epic"
 	}
+	if strings.EqualFold(miner.BinaryName, "wildrig-multi") && profile.StatsType == "" {
+		profile.StatsType = "wildrig"
+	}
 	if strings.EqualFold(miner.BinaryName, "t-rex") {
 		if profile.StatsType == "" {
 			profile.StatsType = "trex"

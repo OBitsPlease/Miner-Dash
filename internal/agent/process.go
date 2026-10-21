@@ -222,6 +222,9 @@ func (m *MinerManager) State() protocol.MinerState {
 	if state.Running && profile.StatsType == "trex" {
 		readTRexStats(profile.StatsURL, &state)
 	}
+	if state.Running && profile.StatsType == "wildrig" {
+		readWildRigStats(m.logs.String(), &state)
+	}
 	if state.Running && profile.StatsType == "command" {
 		readCommandStats(profile, &state)
 	}
@@ -244,6 +247,53 @@ func readEpicStats(output string, state *protocol.MinerState) {
 	}
 	state.Hashrate = hashrate
 	state.HashrateUnit = "H/s"
+}
+
+var wildRigGPUStatsPattern = regexp.MustCompile(`#(\d+)\s+.*?\s+([0-9]+(?:\.[0-9]+)?)\s+(?:[A-Za-z]+/s|TH/s)\s+([0-9]+(?:\.[0-9]+)?)C\s+([0-9]+(?:\.[0-9]+)?)%\s+([0-9]+(?:\.[0-9]+)?)W\s+[^\s]+\s+([0-9]+)\s+([0-9]+)`)
+var wildRigTotalPattern = regexp.MustCompile(`10s:\s+([0-9]+(?:\.[0-9]+)?)\s+(TH/s|GH/s|MH/s|H/s).*?Power:\s+([0-9]+(?:\.[0-9]+)?)W\s+Accepted:\s+([0-9]+)`)
+
+func readWildRigStats(output string, state *protocol.MinerState) {
+	blocks := strings.Split(output, "--------------------------------------[Statistics]--------------------------------------")
+	if len(blocks) == 0 {
+		return
+	}
+	block := blocks[len(blocks)-1]
+	matches := wildRigGPUStatsPattern.FindAllStringSubmatch(block, -1)
+	if len(matches) == 0 {
+		return
+	}
+	state.Devices = state.Devices[:0]
+	var total float64
+	for _, match := range matches {
+		index, _ := strconv.Atoi(match[1])
+		hashrate, _ := strconv.ParseFloat(match[2], 64)
+		unit := strings.TrimSpace(match[0][strings.Index(match[0], match[2])+len(match[2]):])
+		if strings.Contains(unit, "TH/s") {
+			unit = "TH/s"
+		} else if strings.Contains(unit, "GH/s") {
+			unit = "GH/s"
+		} else if strings.Contains(unit, "MH/s") {
+			unit = "MH/s"
+		} else {
+			unit = "H/s"
+		}
+		state.Devices = append(state.Devices, protocol.DeviceHashrate{Index: index, Kind: "GPU", Name: fmt.Sprintf("GPU %d", index), Hashrate: hashrate, Unit: unit})
+		switch unit {
+		case "TH/s":
+			total += hashrate * 1e12
+		case "GH/s":
+			total += hashrate * 1e9
+		case "MH/s":
+			total += hashrate * 1e6
+		default:
+			total += hashrate
+		}
+	}
+	state.Hashrate = total
+	state.HashrateUnit = "H/s"
+	if totalMatch := wildRigTotalPattern.FindStringSubmatch(block); len(totalMatch) == 5 {
+		state.AcceptedShares, _ = strconv.ParseUint(totalMatch[4], 10, 64)
+	}
 }
 
 func readSRBMinerStats(endpoint string, state *protocol.MinerState) {

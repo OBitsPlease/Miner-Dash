@@ -85,8 +85,8 @@ func validateStatsEndpoint(profile Profile) error {
 	if profile.StatsType == "epic" {
 		return nil
 	}
-	if profile.StatsType != "xmrig" && profile.StatsType != "miniz" && profile.StatsType != "srbminer" && profile.StatsType != "trex" {
-		return errors.New("stats_type must be xmrig, miniz, srbminer, trex, epic, or command")
+	if profile.StatsType != "xmrig" && profile.StatsType != "miniz" && profile.StatsType != "srbminer" && profile.StatsType != "trex" && profile.StatsType != "wildrig" {
+		return errors.New("stats_type must be xmrig, miniz, srbminer, trex, wildrig, epic, or command")
 	}
 	parsed, err := url.Parse(profile.StatsURL)
 	if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" {

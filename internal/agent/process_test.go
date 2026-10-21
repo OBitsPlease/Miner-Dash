@@ -256,6 +256,26 @@ func TestEpicStatsIgnoreUnrelatedMinerOutput(t *testing.T) {
 	}
 }
 
+func TestWildRigStatsParseLatestStatisticsBlock(t *testing.T) {
+	state := protocol.MinerState{Running: true}
+	readWildRigStats(`old block
+--------------------------------------[Statistics]--------------------------------------
+#0 GPU 10.0 MH/s 40C 20% 100W 0.1 1000 2000 - - -
+10s: 10.0 MH/s Power: 100.0W Accepted: 2
+--------------------------------------[Statistics]--------------------------------------
+#0 GeForce RTX 4060 Ti 85.94 TH/s 67C 55% 134.9W 0.637 2535 8751 - - -
+#1 GeForce RTX 3060 Ti 59.81 TH/s 58C 30% 134.6W 0.444 1575 6801 - - -
+10s: 145.75 TH/s Power: 940.0W Accepted: 103`, &state)
+	if len(state.Devices) != 2 || state.Devices[0].Index != 0 || state.Devices[1].Index != 1 {
+		t.Fatalf("WildRig devices = %#v", state.Devices)
+	}
+	if state.Devices[0].Hashrate != 85.94 || state.Devices[0].Unit != "TH/s" || state.Hashrate != (85.94+59.81)*1e12 {
+		t.Fatalf("WildRig hashrate = %#v", state)
+	}
+	if state.AcceptedShares != 103 {
+		t.Fatalf("WildRig shares = %#v", state)
+	}
+}
 func TestMinerFailureReasonUsesActionableOutput(t *testing.T) {
 	reason := minerFailureReason("startup\nNot supported algo: progpow\n", errors.New("exit status 1"))
 	if !strings.Contains(reason, "Not supported algo: progpow") {

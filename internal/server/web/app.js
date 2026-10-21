@@ -1923,6 +1923,7 @@ function renderRig(rig, sheets) {
       <button type="button" class="gpu-gear secondary" title="Adjust GPU ${gpu.index} overclocks" aria-label="Adjust GPU ${gpu.index} overclocks">&#9881;</button>
       <div class="gpu-tile-stats">
         <span><small>Hash</small><strong>${deviceHashrate ? escape(formatHashrate(deviceHashrate.hashrate, deviceHashrate.unit)) : "—"}</strong></span>
+        <span><small>Core / Mem</small><strong>${value(gpu.core_clock_mhz, "") } / ${value(gpu.memory_clock_mhz, "")}</strong></span>
         <span><small>Load</small><strong>${value(gpu.utilization_percent, "%")}</strong></span>
         <span><small>Power</small><strong>${value(gpu.power_w, " W")}</strong><em>${formatDailyPowerCost(gpu.power_w, electricityRate)}</em></span>
         <span><small>Power limit</small><strong>${value(gpu.power_limit_w, " W")}</strong></span>
