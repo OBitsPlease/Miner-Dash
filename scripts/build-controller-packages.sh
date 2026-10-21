@@ -22,7 +22,7 @@ while (($# > 0)); do
   esac
 done
 [[ $target == linux || $target == macos ]] || usage
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.0.3" >&2; exit 2; }
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.0.4" >&2; exit 2; }
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 output=${output:-$root/build}
