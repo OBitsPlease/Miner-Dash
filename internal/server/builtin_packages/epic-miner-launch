@@ -1,20 +1,120 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
-current=/opt/minerdash/agent/current
-previous=/opt/minerdash/agent/previous
+stratum="192.168.1.79:3416"
+stratum_login="minerdash"
+threads="$(nproc)"
+large_pages="false"
+threads_explicit="false"
 
-"$current/minerdash-agent" "$@"
-status=$?
-if ((status == 0)) || [[ ! -L "$previous" || ! -x "$previous/minerdash-agent" ]]; then
-  exit "$status"
+while (($#)); do
+    case "$1" in
+        --stratum)
+            stratum="${2:?--stratum requires host:port}"
+            shift 2
+            ;;
+        --threads)
+            threads="${2:?--threads requires a number}"
+            threads_explicit="true"
+            shift 2
+            ;;
+        --stratum-login)
+            stratum_login="${2:?--stratum-login requires a worker name}"
+            shift 2
+            ;;
+        --large-pages)
+            large_pages="true"
+            shift
+            ;;
+        --no-large-pages)
+            large_pages="false"
+            shift
+            ;;
+        *)
+            printf 'Unknown argument: %s\n' "$1" >&2
+            exit 2
+            ;;
+    esac
+done
+
+tls_enabled="false"
+case "$stratum" in
+    stratum+tcp://*|tcp://*)
+        stratum="${stratum#*://}"
+        ;;
+    stratum+ssl://*|stratum+tls://*|ssl://*|tls://*)
+        stratum="${stratum#*://}"
+        tls_enabled="true"
+        ;;
+    *://*)
+        printf 'Unsupported Stratum URL scheme: %s\n' "$stratum" >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! "$stratum" =~ ^([A-Za-z0-9_.-]+|\[[0-9A-Fa-f:]+\]):[0-9]{1,5}$ ]]; then
+    printf 'Invalid Stratum endpoint: %s\n' "$stratum" >&2
+    exit 2
+fi
+if [[ ! "$stratum_login" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    printf 'Invalid Stratum login: %s\n' "$stratum_login" >&2
+    exit 2
+fi
+if [[ ! "$threads" =~ ^[0-9]+$ ]] || ((threads < 1 || threads > 255)); then
+    if [[ "$threads_explicit" == "false" && "$threads" =~ ^[0-9]+$ && "$threads" -gt 255 ]]; then
+        threads="255"
+    else
+        printf 'Threads must be between 1 and 255.\n' >&2
+        exit 2
+    fi
+fi
+port="${stratum##*:}"
+if ((port < 1 || port > 65535)); then
+    printf 'Stratum port must be between 1 and 65535.\n' >&2
+    exit 2
 fi
 
-failed=$(readlink -f "$current")
-fallback=$(readlink -f "$previous")
-ln -sfn -- "$fallback" "$current.rollback"
-mv -Tf -- "$current.rollback" "$current"
-ln -sfn -- "$failed" "$previous.rollback"
-mv -Tf -- "$previous.rollback" "$previous"
-echo "Miner Dash agent startup failed; restored $(basename "$fallback")" >&2
-exec "$current/minerdash-agent" "$@"
+if [[ "$large_pages" == "auto" ]]; then
+    huge_page_size_kb="$(awk '/^Hugepagesize:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
+    huge_pages_free="$(awk '/^HugePages_Free:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
+    if [[ "$huge_page_size_kb" == "2048" && "$huge_pages_free" =~ ^[0-9]+$ ]] && ((huge_pages_free >= 1280)); then
+        large_pages="true"
+    else
+        large_pages="false"
+    fi
+fi
+
+package_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/minerdash/epic-miner"
+mkdir -p "$state_dir"
+config="$state_dir/epic-miner-${threads}.toml"
+printf 'RandomX large pages: %s\n' "$large_pages"
+
+cat >"$config" <<EOF
+[logging]
+log_to_stdout = true
+stdout_log_level = "Info"
+log_to_file = false
+file_log_level = "Info"
+log_file_path = "$state_dir/epic-miner.log"
+log_file_append = true
+
+[mining]
+algorithm = "RandomX"
+run_tui = false
+stratum_server_addr = "$stratum"
+stratum_server_login = "$stratum_login"
+stratum_server_password = "x"
+stratum_server_tls_enabled = $tls_enabled
+miner_plugin_dir = "$package_dir/plugins/"
+miner_plugin_config = []
+gpu_config = []
+
+[mining.randomx_config]
+threads = $threads
+jit = true
+large_pages = $large_pages
+hard_aes = true
+EOF
+
+exec "$package_dir/epic-miner" --config_file_path "$config"
