@@ -81,11 +81,12 @@ On distributions without `dpkg`, download
 - NVIDIA, AMD, and Intel GPU inventory and telemetry
 - Per-GPU driver, VBIOS/firmware, and PCI identity reporting
 - Command-console NVIDIA, AMD, and Intel driver discovery with exact repository package/version selection
-- Exact-version HiveOS NVIDIA updates through the platform-provided `nvidia-driver-update` utility
+- Exact-version NVIDIA updates through the platform-provided `nvidia-driver-update` utility
 - Private local driver-efficiency learning by GPU model, coin, algorithm, and driver, with a 60-minute evidence threshold and update guard
 - Gear-based per-GPU overclock editor with one-click import of locally measured knowledge presets
 - Per-GPU 24-hour activity, temperature, fan, power, algorithm hashrate, and total-power charts
 - CPU, memory, uptime, OS, kernel, and miner telemetry
+- Per-GPU auto tune for highest hashrate with power limits
 - XMRig-compatible hashrate and share telemetry
 - NVIDIA power limits
 - AMD power limits and fixed fan controls
@@ -154,33 +155,6 @@ are labelled so new hardware stands out.
 - TLS 1.3 is required.
 - Configuration changes and command results are retained in the activity log.
 
-Open source does not make an arbitrary miner binary safe. For strict fee
-control, build the miner from a reviewed source commit, upload that exact
-binary, record its source commit, and restrict worker network access to an
-approved Stratum gateway.
-
-## Build a release
-
-Go 1.26 or later is required.
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\build-release.ps1
-```
-
-This tests the code and creates:
-
-- `build\minerdash-server.exe`
-- `build\minerdash-agent-amd64`
-- `build\minerdash-agent-arm64`
-- `build\miningdash-windows-installer.zip`
-- `build\minerdash-rig-os.img.xz`
-- `build\minerdash-rig-os.raw.build-manifest`
-- `build\SHA256SUMS.json`
-
-The release build requires the verified Rig OS artifacts under
-`build\rig-os`. It packages them into the Windows installer for an offline,
-ready-to-write first run and also emits them as standalone release assets.
 
 ## Run the controller interactively
 
