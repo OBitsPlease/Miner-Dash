@@ -542,11 +542,15 @@ func assignTestOverclockProfile(t *testing.T, store *Store, rigID string) {
 func TestFailedPersistenceRollsBackMemory(t *testing.T) {
 	root := t.TempDir()
 	blockedDirectory := filepath.Join(root, "blocked")
-	if err := os.WriteFile(blockedDirectory, []byte("file"), 0o600); err != nil {
+	statePath := filepath.Join(blockedDirectory, "state.json")
+	store, err := NewStore(statePath, "admin", "enroll")
+	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(filepath.Join(blockedDirectory, "state.json"), "admin", "enroll")
-	if err != nil {
+	if err := os.Remove(blockedDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blockedDirectory, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Enroll("must-not-remain", "enroll"); err == nil {
