@@ -543,6 +543,9 @@ func TestFailedPersistenceRollsBackMemory(t *testing.T) {
 	root := t.TempDir()
 	blockedDirectory := filepath.Join(root, "blocked")
 	statePath := filepath.Join(blockedDirectory, "state.json")
+	if err := os.Mkdir(blockedDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	store, err := NewStore(statePath, "admin", "enroll")
 	if err != nil {
 		t.Fatal(err)
