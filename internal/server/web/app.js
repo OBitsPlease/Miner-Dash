@@ -1849,7 +1849,8 @@ function renderRig(rig, sheets) {
         : m.mining_state === "returning"
           ? "Returning to primary"
           : activeAlgorithm;
-    workloadSummary.innerHTML = `${coinBadge(activeCoin, "small")}<span><strong>${escape(activeCoin)}</strong><small>${escape(hashrate)} · ${escape(failoverLabel || "")}</small></span>`;
+    const secondaryWorkload = sheet.secondary_coin ? `<span class="secondary-workload-summary"><strong>${escape(sheet.secondary_coin)}</strong><small>${escape(sheet.secondary_algorithm || "")}</small></span>` : "";
+    workloadSummary.innerHTML = `${coinBadge(activeCoin, "small")}<span><strong>${escape(activeCoin)}</strong><small>${escape(hashrate)} · ${escape(failoverLabel || "")}</small></span>${secondaryWorkload}`;
     workloadSummary.title = m.mining_reason || "";
     workloadSummary.classList.remove("hidden");
   }
@@ -1909,6 +1910,8 @@ function renderRig(rig, sheets) {
   } else {
     coinPriceCard.classList.add("hidden");
   }
+  const overviewTuningProfile = (state.data["overclock-profiles"] || []).find(item => item.id === rig.desired?.overclock_profile_id);
+  const overviewTuning = Object.fromEntries((overviewTuningProfile?.settings || []).map(setting => [String(setting.selector), setting]));
   const gpuRoot = fragment.querySelector(".gpu-list");
   gpuRoot.classList.toggle("hidden", !isGPURig);
   (m.gpus || []).forEach(gpu => {
@@ -1916,6 +1919,7 @@ function renderRig(rig, sheets) {
     const temperature = Number(gpu.temperature_c || 0);
     row.className = `gpu ${thermalClass(temperature)}`;
     const deviceHashrate = (m.miner?.devices || []).find(device => device.index === gpu.index);
+    const tuning = overviewTuning[String(gpu.index)] || overviewTuning["*"] || {};
     row.title = `GPU ${gpu.index} · ${gpu.vendor || ""} ${gpu.name || ""}`;
     row.innerHTML = `
       <div class="gpu-tile-heading"><span class="gpu-tile-title">${fanIcon()}<strong>GPU ${gpu.index}</strong></span><b>${value(temperature, "°C")}</b></div>
@@ -1923,7 +1927,7 @@ function renderRig(rig, sheets) {
       <button type="button" class="gpu-gear secondary" title="Adjust GPU ${gpu.index} overclocks" aria-label="Adjust GPU ${gpu.index} overclocks">&#9881;</button>
       <div class="gpu-tile-stats">
         <span><small>Hash</small><strong>${deviceHashrate ? escape(formatHashrate(deviceHashrate.hashrate, deviceHashrate.unit)) : "—"}</strong></span>
-        <span><small>Core / Mem</small><strong>${value(gpu.core_clock_mhz, "") } / ${value(gpu.memory_clock_mhz, "")}</strong></span>
+        <span><small>Core / Mem</small><strong>${value(gpu.core_clock_mhz, "")} / ${value(gpu.memory_clock_mhz, "")}</strong></span>\n        <span><small>OC</small><strong>${Number(tuning.core_offset_mhz || 0)} / ${Number(tuning.memory_offset_mhz || 0)}</strong></span>
         <span><small>Load</small><strong>${value(gpu.utilization_percent, "%")}</strong></span>
         <span><small>Power</small><strong>${value(gpu.power_w, " W")}</strong><em>${formatDailyPowerCost(gpu.power_w, electricityRate)}</em></span>
         <span><small>Power limit</small><strong>${value(gpu.power_limit_w, " W")}</strong></span>

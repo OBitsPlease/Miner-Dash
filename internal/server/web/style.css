@@ -796,7 +796,7 @@ header p { font-size: .78rem; }
 .rig-card:not(.focused):not(.expanded) > .rig-panel { display: none; }
 .rig-card:not(.focused):hover { background: #252525; }
 .rig-card:not(.focused) .rig-tabs,
-.rig-card:not(.focused) .gpu-list,
+
 .rig-card:not(.focused) .coin-price-card,
 .rig-card:not(.focused) .system-detail-grid,
 .rig-card:not(.focused) .pool-health,
@@ -1704,3 +1704,20 @@ aside > .connection { margin-left: 0; }
   .power-cost-grid, .calc-layout, .event-columns { grid-template-columns: minmax(0, 1fr); }
   .calc-rig-list, .event-list { max-height: none; }
 }
+
+.rig-card:not(.focused) .gpu-list { display: grid; grid-template-columns: 1fr; gap: 1px; margin-top: 1px; background: #363636; }
+.rig-card:not(.focused) .gpu { display: grid; grid-template-columns: minmax(150px, 1.6fr) repeat(7, minmax(58px, .7fr)); align-items: center; gap: .35rem; min-height: 34px; padding: .25rem .45rem; border: 0; border-radius: 0; background: #171717; }
+.rig-card:not(.focused) .gpu-model { margin: 0; font-size: .64rem; }
+.rig-card:not(.focused) .gpu-tile-heading { display: flex; align-items: center; justify-content: flex-start; gap: .35rem; }
+.rig-card:not(.focused) .gpu-tile-heading b { font-size: .68rem; }
+.rig-card:not(.focused) .gpu-tile-title strong { font-size: .68rem; }
+.rig-card:not(.focused) .gpu-tile-stats { display: contents; }
+.rig-card:not(.focused) .gpu-tile-stats span { padding: 0; background: transparent; }
+.rig-card:not(.focused) .gpu-tile-stats small { display: block; color: #78848c; font-size: .55rem; }
+.rig-card:not(.focused) .gpu-tile-stats strong { margin: 0; font-size: .68rem; }
+.rig-card:not(.focused) .gpu-tile-stats em, .rig-card:not(.focused) .gpu-clocks, .rig-card:not(.focused) .gpu-software { display: none; }
+.rig-card:not(.focused) .gpu-gear { top: .2rem; right: .2rem; width: 20px; min-height: 20px; font-size: .75rem; }
+.secondary-workload-summary { display: block; margin-left: .7rem; padding-left: .7rem; border-left: 1px solid #46515c; }
+.secondary-workload-summary strong, .secondary-workload-summary small { display: block; }
+.secondary-workload-summary strong { color: #c4a6ff; font-size: .68rem; }
+.secondary-workload-summary small { color: #9d91b9; font-size: .6rem; }
