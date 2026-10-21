@@ -1714,6 +1714,24 @@ function renderOverviewStats(rigs, sheets) {
   ).join("");
 }
 
+function hasMetric(object, key) {
+  return object != null && Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function minerHashrateLabel(miner) {
+  return Number(miner?.hashrate || 0) > 0
+    ? formatHashrate(miner.hashrate, miner.hashrate_unit)
+    : "Unavailable";
+}
+
+function minerShareLabel(miner) {
+  const acceptedAvailable = hasMetric(miner, "accepted_shares");
+  const rejectedAvailable = hasMetric(miner, "rejected_shares");
+  if (!acceptedAvailable && !rejectedAvailable) return "Unavailable";
+  return `${Number(miner.accepted_shares || 0).toLocaleString()} / ${Number(miner.rejected_shares || 0).toLocaleString()}`;
+}
+
+
 function renderRig(rig, sheets) {
   const fragment = $("#rig-template").content.cloneNode(true);
   const card = fragment.querySelector(".rig-card");
@@ -1975,8 +1993,8 @@ function renderRig(rig, sheets) {
   miner.innerHTML = m.miner?.running
     ? `<div class="miner-identity">${coinBadge(sheet?.coin, "small")}<span><small>Flight sheet</small><strong>${escape(sheet?.coin || "Mining")} · ${escape(sheet?.algorithm || "")}</strong></span></div>
        <div class="miner-detail"><small>Miner</small><strong>${escape(minerDefinition?.name || m.miner.profile || "Unknown")}</strong></div>
-       <div class="miner-detail miner-hash"><small>Hashrate</small><strong>${m.miner.hashrate ? escape(formatHashrate(m.miner.hashrate, m.miner.hashrate_unit)) : "Starting…"}</strong></div>
-       <div class="miner-detail"><small>Shares</small><strong>${Number(m.miner.accepted_shares || 0).toLocaleString()} / ${Number(m.miner.rejected_shares || 0).toLocaleString()}</strong></div>`
+       <div class="miner-detail miner-hash"><small>Hashrate</small><strong>${escape(minerHashrateLabel(m.miner))}</strong></div>
+       <div class="miner-detail"><small>Shares</small><strong>${escape(minerShareLabel(m.miner))}</strong></div>`
     : `<div class="miner-identity stopped"><span><small>Mining</small><strong>Miner stopped</strong></span></div>`;
   if (!m.miner?.running && sheet) {
     const hint = document.createElement("p");
@@ -1984,6 +2002,9 @@ function renderRig(rig, sheets) {
     hint.textContent = `Assigned flight sheet: ${sheet.name || "unnamed"} · software: ${minerDefinition?.name || sheet.miner_id || "not assigned"}. Start miner uses this assignment.`;
     miner.append(hint);
   }
+  const acceptedAvailable = hasMetric(m.miner, "accepted_shares");
+  const rejectedAvailable = hasMetric(m.miner, "rejected_shares");
+  const shareTelemetryAvailable = acceptedAvailable || rejectedAvailable;
   const accepted = Number(m.miner?.accepted_shares || 0);
   const rejected = Number(m.miner?.rejected_shares || 0);
   const totalShares = accepted + rejected;
@@ -1994,12 +2015,15 @@ function renderRig(rig, sheets) {
   if (!rig.online || !m.miner?.running) {
     poolHealth = "offline";
     poolHealthLabel = rig.online ? "Miner stopped" : "Rig offline";
-  } else if (m.miner.last_error || rejectionRate >= 5) {
+  } else if (m.miner.last_error || (shareTelemetryAvailable && rejectionRate >= 5)) {
     poolHealth = "critical";
     poolHealthLabel = "Needs attention";
-  } else if (!totalShares || rejectionRate >= 1 || telemetryAge > 30) {
+  } else if (telemetryAge > 30) {
     poolHealth = "warning";
-    poolHealthLabel = !totalShares ? "Waiting for shares" : "Check connection";
+    poolHealthLabel = "Check connection";
+  } else if (shareTelemetryAvailable && (!totalShares || rejectionRate >= 1)) {
+    poolHealth = "warning";
+    poolHealthLabel = "Check share telemetry";
   }
   const poolHealthRoot = fragment.querySelector(".pool-health");
   poolHealthRoot.classList.add(poolHealth);
@@ -2008,10 +2032,10 @@ function renderRig(rig, sheets) {
     <div class="pool-health-grid">
       <div><small>Pool</small><strong title="${escape(pool?.url || "")}">${escape(pool?.name || "Not assigned")}</strong></div>
       <div><small>Connection</small><strong>${m.miner?.running && rig.online ? "Connected" : "Disconnected"}</strong></div>
-      <div><small>Hashrate</small><strong>${m.miner?.hashrate ? escape(formatHashrate(m.miner.hashrate, m.miner.hashrate_unit)) : "—"}</strong></div>
-      <div><small>Accepted</small><strong>${accepted.toLocaleString()}</strong></div>
-      <div><small>Rejected</small><strong>${rejected.toLocaleString()}</strong></div>
-      <div><small>Reject rate</small><strong>${totalShares ? `${rejectionRate.toFixed(2)}%` : "—"}</strong></div>
+      <div><small>Hashrate</small><strong>${escape(minerHashrateLabel(m.miner))}</strong></div>
+      <div><small>Accepted</small><strong>${acceptedAvailable ? accepted.toLocaleString() : "Unavailable"}</strong></div>
+      <div><small>Rejected</small><strong>${rejectedAvailable ? rejected.toLocaleString() : "Unavailable"}</strong></div>
+      <div><small>Reject rate</small><strong>${shareTelemetryAvailable && totalShares ? `${rejectionRate.toFixed(2)}%` : "Unavailable"}</strong></div>
       <div><small>Telemetry</small><strong>${escape(formatAge(telemetryAge))}</strong></div>
     </div>
     <p>Universal miner telemetry. Pool luck, block history, and network status require a compatible pool API.</p>`;

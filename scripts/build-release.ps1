@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '1.0.4',
+    [string]$Version = '1.0.5',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\build'),
     [string]$RigOSDirectory = (Join-Path $PSScriptRoot '..\build\rig-os')
 )

@@ -13,7 +13,7 @@ addresses only. Never put wallet seed phrases or private keys on a mining rig.
 
 No repository clone or command line is required.
 
-1. Download **[MinerDash-Setup-1.0.4.exe](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.4/MinerDash-Setup-1.0.4.exe)**.
+1. Download **[MinerDash-Setup-1.0.5.exe](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.5/MinerDash-Setup-1.0.5.exe)**.
 2. Double-click the installer and approve the Windows administrator prompt.
 3. Save the first-login credentials displayed during setup.
 4. Open the **Mining Dash** desktop shortcut.
@@ -24,8 +24,8 @@ also include SHA-256 checksums so the installer can be verified before use.
 
 ## Install on macOS
 
-1. Download **MinerDash-Controller-1.0.4.pkg** from the
-   [1.0.4 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.4).
+1. Download **MinerDash-Controller-1.0.5.pkg** from the
+   [1.0.5 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.5).
 2. Open it and approve the administrator prompt. The package is not notarized
    yet, so Gatekeeper may require **System Settings → Privacy & Security → Open
    Anyway**.
@@ -36,16 +36,16 @@ also include SHA-256 checksums so the installer can be verified before use.
 
 ## Install on Linux
 
-1. Download **minerdash-controller_1.0.4_amd64.deb** (or the `arm64` build) from
-   the [1.0.4 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.4).
-2. Install it with `sudo apt install ./minerdash-controller_1.0.4_amd64.deb`.
+1. Download **minerdash-controller_1.0.5_amd64.deb** (or the `arm64` build) from
+   the [1.0.5 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.5).
+2. Install it with `sudo apt install ./minerdash-controller_1.0.5_amd64.deb`.
 3. The controller installs to `/opt/minerdash`, stores its data in
    `/var/lib/minerdash-controller`, and runs as the `minerdash-controller`
    systemd service.
 4. Open `https://<this-host>:8443`.
 
 On distributions without `dpkg`, download
-**minerdash-controller-1.0.4-linux.tar.gz**, extract it, and run
+**minerdash-controller-1.0.5-linux.tar.gz**, extract it, and run
 `sudo ./install.sh`.
 
 ## Platform features
