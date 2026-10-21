@@ -5,6 +5,8 @@
 *.conf text eol=lf
 *.template text eol=lf
 *.yaml text eol=lf
+
+internal/server/builtin_packages/epic-miner-launch text eol=lf
 *.yml text eol=lf
 
 *.bat text eol=crlf
