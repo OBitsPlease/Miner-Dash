@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"minerdash/internal/protocol"
@@ -54,6 +56,35 @@ func TestProfileAndFlightSheetArgumentsAreBothResolved(t *testing.T) {
 		if arguments[index] != want[index] {
 			t.Fatalf("arguments = %#v, want %#v", arguments, want)
 		}
+	}
+}
+
+func TestEpicMinerArgumentsPreserveSelectedStratumURL(t *testing.T) {
+	for _, poolURL := range []string{
+		"stratum+tcp://192.0.2.44:3416",
+		"stratum+ssl://pool.invalid:3416",
+		"stratum+tls://[2001:db8::44]:3416",
+	} {
+		t.Run(poolURL, func(t *testing.T) {
+			arguments := resolveArguments([]string{"--stratum", "{POOL}", "--large-pages"}, map[string]string{
+				"{POOL}": poolURL,
+			})
+			want := []string{"--stratum", poolURL, "--large-pages"}
+			for index := range want {
+				if arguments[index] != want[index] {
+					t.Fatalf("Epic arguments = %#v, want %#v", arguments, want)
+				}
+			}
+		})
+	}
+}
+
+func TestEpicStratumLoginUsesSanitizedWorkerName(t *testing.T) {
+	if got := stratumLogin(" CPU Rig #01 "); got != "CPU-Rig--01" {
+		t.Fatalf("stratumLogin() = %q", got)
+	}
+	if got := stratumLogin("..."); got != "minerdash" {
+		t.Fatalf("blank stratumLogin() = %q", got)
 	}
 }
 
@@ -147,6 +178,43 @@ func TestMiniZStatsIncludePerGPUHashrates(t *testing.T) {
 	}
 }
 
+func TestTRexStatsIncludePerGPUHashrates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"accepted_count":41,
+			"rejected_count":2,
+			"hashrate":88700000,
+			"gpus":[
+				{"device_id":0,"gpu_id":0,"name":"NVIDIA GeForce RTX 3060 Ti","hashrate":44300000},
+				{"device_id":1,"gpu_id":1,"name":"NVIDIA GeForce RTX 3060 Ti","hashrate":44400000}
+			]
+		}`))
+	}))
+	defer server.Close()
+	state := protocol.MinerState{Running: true}
+	readTRexStats(server.URL, &state)
+	if state.Hashrate != 88700000 || state.HashrateUnit != "H/s" || len(state.Devices) != 2 {
+		t.Fatalf("T-Rex state = %#v", state)
+	}
+	if state.AcceptedShares != 41 || state.RejectedShares != 2 {
+		t.Fatalf("T-Rex shares = %#v", state)
+	}
+	if state.Devices[1].Index != 1 || state.Devices[1].Kind != "GPU" || state.Devices[1].Hashrate != 44400000 {
+		t.Fatalf("T-Rex device = %#v", state.Devices[1])
+	}
+}
+
+func TestTRexAPIArgumentsAreAddedOnlyWhenMissing(t *testing.T) {
+	added := ensureTRexAPIArguments([]string{"-o", "stratum+tcp://pool:1234"})
+	if len(added) != 4 || added[2] != "--api-bind-http" || added[3] != "127.0.0.1:4067" {
+		t.Fatalf("added arguments = %#v", added)
+	}
+	existing := []string{"-o", "stratum+tcp://pool:1234", "--api-bind-http", "127.0.0.1:5000"}
+	if result := ensureTRexAPIArguments(existing); len(result) != len(existing) {
+		t.Fatalf("operator bind was overridden: %#v", result)
+	}
+}
+
 func TestSRBMinerStatsIncludeHashrateAndShares(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{
@@ -163,7 +231,34 @@ func TestSRBMinerStatsIncludeHashrateAndShares(t *testing.T) {
 	if state.Hashrate != 17125.5 || state.HashrateUnit != "H/s" || len(state.Devices) != 2 {
 		t.Fatalf("SRBMiner state = %#v", state)
 	}
+
 	if state.AcceptedShares != 24 || state.RejectedShares != 1 || state.Devices[1].Hashrate != 8625.25 {
 		t.Fatalf("SRBMiner device stats = %#v", state)
+	}
+}
+
+func TestEpicStatsUseNewestHeadlessHashrate(t *testing.T) {
+	state := protocol.MinerState{Running: true}
+	readEpicStats(`
+Oct 07 00:01:02.100 INFO Mining: RandomX at 14872 hps (hashes per second)
+Oct 07 00:01:04.100 INFO Mining: RandomX at 15123.5 hps (hashes per second)
+`, &state)
+	if state.Hashrate != 15123.5 || state.HashrateUnit != "H/s" {
+		t.Fatalf("Epic state = %#v", state)
+	}
+}
+
+func TestEpicStatsIgnoreUnrelatedMinerOutput(t *testing.T) {
+	state := protocol.MinerState{Running: true}
+	readEpicStats("Starting Epic Miner\nWaiting for job\n", &state)
+	if state.Hashrate != 0 || state.HashrateUnit != "" {
+		t.Fatalf("Epic state = %#v", state)
+	}
+}
+
+func TestMinerFailureReasonUsesActionableOutput(t *testing.T) {
+	reason := minerFailureReason("startup\nNot supported algo: progpow\n", errors.New("exit status 1"))
+	if !strings.Contains(reason, "Not supported algo: progpow") {
+		t.Fatalf("failure reason omitted miner output: %q", reason)
 	}
 }

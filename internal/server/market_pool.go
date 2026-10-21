@@ -24,15 +24,16 @@ type coinDefinition struct {
 }
 
 var coinDefinitions = map[string]coinDefinition{
-	"BTC": {ID: "bitcoin", Name: "Bitcoin", Logo: "/coins/btc.svg"},
-	"ETH": {ID: "ethereum", Name: "Ethereum", Logo: "/coins/eth.svg"},
-	"ETC": {ID: "ethereum-classic", Name: "Ethereum Classic", Logo: "/coins/etc.svg"},
-	"RVN": {ID: "ravencoin", Name: "Ravencoin", Logo: "/coins/rvn.svg"},
-	"XMR": {ID: "monero", Name: "Monero", Logo: "/coins/xmr.svg"},
-	"QRL": {ID: "quantum-resistant-ledger", Name: "Quantum Resistant Ledger", Logo: "/coins/qrl.svg"},
-	"ZCL": {ID: "zclassic", Name: "Zclassic", Logo: "/coins/zclassic-zcl-logo.png"},
-	"VTC": {ID: "vertcoin", Name: "Vertcoin", Logo: "/coins/vertcoin-vtc-logo.png"},
-	"YEC": {ID: "ycash", Name: "Ycash", Logo: "/coins/ycash-yec-logo.png"},
+	"BTC":  {ID: "bitcoin", Name: "Bitcoin", Logo: "/coins/btc.svg"},
+	"ETH":  {ID: "ethereum", Name: "Ethereum", Logo: "/coins/eth.svg"},
+	"ETC":  {ID: "ethereum-classic", Name: "Ethereum Classic", Logo: "/coins/etc.svg"},
+	"RVN":  {ID: "ravencoin", Name: "Ravencoin", Logo: "/coins/rvn.svg"},
+	"XMR":  {ID: "monero", Name: "Monero", Logo: "/coins/xmr.svg"},
+	"QRL":  {ID: "quantum-resistant-ledger", Name: "Quantum Resistant Ledger", Logo: "/coins/qrl.svg"},
+	"EPIC": {ID: "epic-cash", Name: "Epic Cash", Logo: "/coins/epic.svg"},
+	"ZCL":  {ID: "zclassic", Name: "Zclassic", Logo: "/coins/zclassic-zcl-logo.png"},
+	"VTC":  {ID: "vertcoin", Name: "Vertcoin", Logo: "/coins/vertcoin-vtc-logo.png"},
+	"YEC":  {ID: "ycash", Name: "Ycash", Logo: "/coins/ycash-yec-logo.png"},
 }
 
 type coinMarket struct {

@@ -80,7 +80,9 @@ if ($disk.BusType -ne 'USB' -or $disk.IsBoot -or $disk.IsSystem -or [long]$disk.
 if ($disk.IsOffline) { Set-Disk -Number %d -IsOffline $false -ErrorAction Stop }
 if ($disk.IsReadOnly) { Set-Disk -Number %d -IsReadOnly $false -ErrorAction Stop }
 Clear-Disk -Number %d -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
-`, device.DiskNumber, device.SizeBytes, device.DiskNumber, device.DiskNumber, device.DiskNumber)
+Update-Disk -Number %d -ErrorAction Stop
+Start-Sleep -Milliseconds 750
+`, device.DiskNumber, device.SizeBytes, device.DiskNumber, device.DiskNumber, device.DiskNumber, device.DiskNumber)
 	if output, err := runUSBPowerShell(script); err != nil {
 		return fmt.Errorf("prepare USB drive: %w: %s", err, strings.TrimSpace(string(output)))
 	}

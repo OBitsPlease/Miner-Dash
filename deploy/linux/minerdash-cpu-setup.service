@@ -1,0 +1,33 @@
+[Unit]
+Description=Prepare CPU miner kernel support and RandomX huge pages on demand
+Documentation=file:/usr/share/doc/minerdash-linux/OPERATIONS.md
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/sbin/minerdash-cpu-setup
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_MODULE
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,7 @@ type Config struct {
 	StateFile       string             `json:"state_file"`
 	PackageDir      string             `json:"package_dir,omitempty"`
 	Profiles        map[string]Profile `json:"profiles"`
+	CPUOptimization bool               `json:"cpu_optimization"`
 }
 
 type Identity struct {
@@ -42,7 +43,7 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var config Config
+	config := Config{CPUOptimization: true}
 	decoder := json.NewDecoder(bytesNewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {
@@ -81,8 +82,11 @@ func validateStatsEndpoint(profile Profile) error {
 		}
 		return nil
 	}
-	if profile.StatsType != "xmrig" && profile.StatsType != "miniz" && profile.StatsType != "srbminer" {
-		return errors.New("stats_type must be xmrig, miniz, srbminer, or command")
+	if profile.StatsType == "epic" {
+		return nil
+	}
+	if profile.StatsType != "xmrig" && profile.StatsType != "miniz" && profile.StatsType != "srbminer" && profile.StatsType != "trex" {
+		return errors.New("stats_type must be xmrig, miniz, srbminer, trex, epic, or command")
 	}
 	parsed, err := url.Parse(profile.StatsURL)
 	if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" {

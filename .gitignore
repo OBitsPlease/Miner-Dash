@@ -2,3 +2,17 @@
 /data/
 /minerdash-agent
 /minerdash-server.exe
+HANDOFF.md
+*.log
+*.key
+secrets.json
+state.json
+telemetry/
+packages/
+packages/*.bin
+packages/*.tar.gz
+
+*.deb
+SHA256SUMS
+RELEASE-NOTES-*.md
+.continue/

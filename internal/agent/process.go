@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,29 +77,58 @@ func (m *MinerManager) Start(name string) error {
 }
 
 func (m *MinerManager) StartResolved(configuration protocol.ResolvedConfiguration, workerName string) error {
-	if configuration.Miner.Profile == "" {
+	return m.StartWorkload(protocol.ResolvedWorkload{
+		Miner: configuration.Miner, Wallet: configuration.Wallet, Pool: configuration.Pool,
+		MiningUser: configuration.MiningUser, WorkerName: configuration.WorkerName,
+	}, workerName)
+}
+
+func (m *MinerManager) StartWorkload(workload protocol.ResolvedWorkload, workerName string) error {
+	if workload.Miner.Profile == "" {
 		return m.Stop()
 	}
-	if configuration.WorkerName != "" {
-		workerName = configuration.WorkerName
+	if workload.WorkerName != "" {
+		workerName = workload.WorkerName
 	}
-	wallet := configuration.Wallet.Address
-	if configuration.MiningUser != "" {
-		wallet = configuration.MiningUser
+	wallet := workload.Wallet.Address
+	if workload.MiningUser != "" {
+		wallet = workload.MiningUser
 	}
 	replacements := map[string]string{
-		"{POOL}":          configuration.Pool.URL,
-		"{POOL_ENDPOINT}": poolEndpoint(configuration.Pool.URL),
+		"{POOL}":          workload.Pool.URL,
+		"{POOL_ENDPOINT}": poolEndpoint(workload.Pool.URL),
 		"{WALLET}":        wallet,
-		"{PASSWORD}":      configuration.Pool.Password,
+		"{PASSWORD}":      workload.Pool.Password,
 		"{WORKER}":        workerName,
-		"{COIN}":          configuration.Wallet.Coin,
-		"{ALGORITHM}":     configuration.Miner.Algorithm,
+		"{STRATUM_LOGIN}": stratumLogin(workerName),
+		"{COIN}":          workload.Wallet.Coin,
+		"{ALGORITHM}":     workload.Miner.Algorithm,
 	}
 	if err := m.Stop(); err != nil {
 		return err
 	}
-	return m.start(configuration.Miner.Profile, configuration.Miner.ExtraArguments, replacements)
+	return m.start(workload.Miner.Profile, workload.Miner.ExtraArguments, replacements)
+}
+
+func stratumLogin(workerName string) string {
+	workerName = strings.TrimSpace(workerName)
+	var result strings.Builder
+	for _, character := range workerName {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '-', character == '_', character == '.':
+			result.WriteRune(character)
+		default:
+			result.WriteByte('-')
+		}
+	}
+	login := strings.Trim(result.String(), "-.")
+	if login == "" {
+		return "minerdash"
+	}
+	return login
 }
 
 func resolveArguments(arguments []string, replacements map[string]string) []string {
@@ -127,6 +158,7 @@ func (m *MinerManager) start(name string, extraArguments []string, replacements 
 	command := exec.Command(profile.Command, arguments...)
 	command.Dir = profile.WorkingDir
 	command.Env = append(os.Environ(), envList(profile.Env)...)
+	m.logs.Reset()
 	command.Stdout = io.MultiWriter(os.Stdout, m.logs)
 	command.Stderr = io.MultiWriter(os.Stderr, m.logs)
 	if err := command.Start(); err != nil {
@@ -187,10 +219,31 @@ func (m *MinerManager) State() protocol.MinerState {
 	if state.Running && profile.StatsType == "srbminer" {
 		readSRBMinerStats(profile.StatsURL, &state)
 	}
+	if state.Running && profile.StatsType == "trex" {
+		readTRexStats(profile.StatsURL, &state)
+	}
 	if state.Running && profile.StatsType == "command" {
 		readCommandStats(profile, &state)
 	}
+	if state.Running && profile.StatsType == "epic" {
+		readEpicStats(m.logs.String(), &state)
+	}
 	return state
+}
+
+var epicHashratePattern = regexp.MustCompile(`(?i)Mining:\s+[A-Za-z0-9_]+\s+at\s+([0-9]+(?:\.[0-9]+)?)\s+hps\b`)
+
+func readEpicStats(output string, state *protocol.MinerState) {
+	matches := epicHashratePattern.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return
+	}
+	hashrate, err := strconv.ParseFloat(matches[len(matches)-1][1], 64)
+	if err != nil {
+		return
+	}
+	state.Hashrate = hashrate
+	state.HashrateUnit = "H/s"
 }
 
 func readSRBMinerStats(endpoint string, state *protocol.MinerState) {
@@ -275,6 +328,60 @@ func readSRBMinerStats(endpoint string, state *protocol.MinerState) {
 		if deviceIndex == 0 && device.ID == 0 && device.Device == 0 && index > 0 {
 			state.Devices[len(state.Devices)-1].Index = index
 		}
+	}
+	if state.Hashrate == 0 {
+		for _, device := range state.Devices {
+			state.Hashrate += device.Hashrate
+		}
+	}
+}
+
+func readTRexStats(endpoint string, state *protocol.MinerState) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(endpoint)
+	if err != nil {
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return
+	}
+	var report struct {
+		Hashrate      float64 `json:"hashrate"`
+		AcceptedCount uint64  `json:"accepted_count"`
+		RejectedCount uint64  `json:"rejected_count"`
+		GPUs          []struct {
+			GPUID    int     `json:"gpu_id"`
+			DeviceID int     `json:"device_id"`
+			Name     string  `json:"name"`
+			Hashrate float64 `json:"hashrate"`
+		} `json:"gpus"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&report) != nil {
+		return
+	}
+	state.Hashrate = report.Hashrate
+	state.HashrateUnit = "H/s"
+	state.AcceptedShares = report.AcceptedCount
+	state.RejectedShares = report.RejectedCount
+	state.Devices = state.Devices[:0]
+	for position, gpu := range report.GPUs {
+		// T-Rex reports both the driver device id and its own sequential gpu id;
+		// nvidia-smi indexes match device_id, which Smart Tune compares against.
+		index := gpu.DeviceID
+		if index == 0 && gpu.GPUID != 0 {
+			index = gpu.GPUID
+		}
+		if index == 0 && gpu.GPUID == 0 && gpu.DeviceID == 0 && position > 0 {
+			index = position
+		}
+		name := gpu.Name
+		if name == "" {
+			name = fmt.Sprintf("GPU %d", index)
+		}
+		state.Devices = append(state.Devices, protocol.DeviceHashrate{
+			Index: index, Kind: "GPU", Name: name, Hashrate: gpu.Hashrate, Unit: "H/s",
+		})
 	}
 	if state.Hashrate == 0 {
 		for _, device := range state.Devices {
@@ -443,8 +550,28 @@ func (m *MinerManager) wait(command *exec.Cmd, done chan struct{}) {
 		return
 	}
 	if err != nil && !strings.Contains(err.Error(), "signal: killed") {
-		m.lastError = err.Error()
+		m.lastError = minerFailureReason(m.logs.String(), err)
 	}
+}
+
+func minerFailureReason(output string, waitErr error) string {
+	const ansiPattern = "\x1b["
+	lines := strings.FieldsFunc(output, func(character rune) bool {
+		return character == '\n' || character == '\r'
+	})
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(strings.ReplaceAll(lines[index], ansiPattern, ""))
+		lower := strings.ToLower(line)
+		if line != "" && (strings.Contains(lower, "not supported") ||
+			strings.Contains(lower, "unsupported") ||
+			strings.Contains(lower, "invalid") ||
+			strings.Contains(lower, "error") ||
+			strings.Contains(lower, "failed") ||
+			strings.Contains(lower, "cannot")) {
+			return fmt.Sprintf("%s (%s)", line, waitErr)
+		}
+	}
+	return waitErr.Error()
 }
 
 func envList(values map[string]string) []string {
@@ -459,6 +586,12 @@ type boundedBuffer struct {
 	mu    sync.Mutex
 	data  bytes.Buffer
 	limit int
+}
+
+func (b *boundedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data.Reset()
 }
 
 func (b *boundedBuffer) Write(value []byte) (int, error) {

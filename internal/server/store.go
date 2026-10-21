@@ -41,6 +41,7 @@ type state struct {
 	Miners            map[string]protocol.MinerDefinition         `json:"miners"`
 	FlightSheets      map[string]protocol.FlightSheet             `json:"flight_sheets"`
 	OverclockProfiles map[string]protocol.OverclockProfile        `json:"overclock_profiles"`
+	GPUPowerPolicy    protocol.GPUPowerPolicy                     `json:"gpu_power_policy"`
 	Activities        []protocol.Activity                         `json:"activities"`
 	History           map[string][]protocol.Metrics               `json:"history,omitempty"`
 	HistoryRecordedAt map[string]time.Time                        `json:"history_recorded_at,omitempty"`
@@ -278,19 +279,16 @@ func (s *Store) CreateEnrollmentGrant(name string, lifetime time.Duration) (stri
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for hash, grant := range s.state.EnrollmentGrants {
-		if !grant.ExpiresAt.After(now) {
-			delete(s.state.EnrollmentGrants, hash)
-		}
-	}
 	for _, rig := range s.state.Rigs {
 		if strings.EqualFold(rig.Name, name) {
 			return "", errors.New("rig name is already in use; choose a unique name")
 		}
 	}
-	for _, grant := range s.state.EnrollmentGrants {
-		if grant.ExpiresAt.After(now) && strings.EqualFold(grant.RigName, name) {
-			return "", errors.New("a pending USB pairing already uses this rig name")
+	replaced := make(map[string]enrollmentGrant)
+	for hash, grant := range s.state.EnrollmentGrants {
+		if !grant.ExpiresAt.After(now) || strings.EqualFold(grant.RigName, name) {
+			replaced[hash] = grant
+			delete(s.state.EnrollmentGrants, hash)
 		}
 	}
 	s.state.EnrollmentGrants[hashToken(token)] = enrollmentGrant{
@@ -298,6 +296,10 @@ func (s *Store) CreateEnrollmentGrant(name string, lifetime time.Duration) (stri
 		ExpiresAt: now.Add(lifetime),
 	}
 	if err := s.saveLocked(); err != nil {
+		delete(s.state.EnrollmentGrants, hashToken(token))
+		for hash, grant := range replaced {
+			s.state.EnrollmentGrants[hash] = grant
+		}
 		return "", err
 	}
 	return token, nil
@@ -329,7 +331,9 @@ func (s *Store) Heartbeat(id string, metrics protocol.Metrics, ipAddress string)
 	}
 	rig.LastHeartbeat = time.Now().UTC()
 	rig.IPAddress = ipAddress
-	metrics.MiningCoin, metrics.MiningAlgorithm = s.gpuWorkloadLocked(rig.Desired.FlightSheetID)
+	if metrics.MiningCoin == "" && metrics.MiningAlgorithm == "" {
+		metrics.MiningCoin, metrics.MiningAlgorithm = s.gpuWorkloadLocked(rig.Desired.FlightSheetID)
+	}
 	rig.Metrics = metrics
 	if err := s.recordMetricsLocked(id, metrics); err != nil {
 		return err
@@ -347,6 +351,18 @@ func (s *Store) ListRigs(now time.Time) []protocol.Rig {
 		rig.Online = !rig.LastHeartbeat.IsZero() && now.Sub(rig.LastHeartbeat) < 30*time.Second
 		rig.DriverEfficiency = s.driverEfficiencySummariesLocked(&rig)
 		rig.OverclockPresets = s.overclockKnowledgePresetsLocked(&rig)
+		for index := len(stored.Commands) - 1; index >= 0; index-- {
+			if stored.Commands[index].Action != "smart-tune" {
+				continue
+			}
+			command := stored.Commands[index]
+			if command.SmartTune != nil {
+				request := *command.SmartTune
+				command.SmartTune = &request
+			}
+			rig.SmartTuneCommand = &command
+			break
+		}
 		result = append(result, rig)
 	}
 	return result
@@ -360,12 +376,18 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 	if !validCommandAction(request.Action) {
 		return protocol.Command{}, errors.New("unsupported command action")
 	}
+	if request.Action == "shell-command" {
+		request.ShellCommand = strings.TrimSpace(request.ShellCommand)
+		if request.ShellCommand == "" || len(request.ShellCommand) > 4096 {
+			return protocol.Command{}, errors.New("shell command must contain 1 to 4096 characters")
+		}
+	}
 	if request.Action == "smart-tune" {
 		if request.SmartTune == nil {
 			return protocol.Command{}, errors.New("smart tune settings are required")
 		}
-		if request.SmartTune.Mode != "balanced" || request.SmartTune.MaxPowerW <= 0 || request.SmartTune.MaxPowerW > 115 {
-			return protocol.Command{}, errors.New("smart tune requires balanced mode and a power limit from 1 to 115 W")
+		if request.SmartTune.Mode != "balanced" || request.SmartTune.MaxPowerW < 0 {
+			return protocol.Command{}, errors.New("smart tune requires balanced mode and a non-negative optional power limit")
 		}
 		if request.SmartTune.MaxTemperatureC < 60 || request.SmartTune.MaxTemperatureC > 85 {
 			return protocol.Command{}, errors.New("smart tune temperature limit must be from 60 to 85 C")
@@ -379,8 +401,31 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 		if request.DriverUpdate.Channel != "stable" {
 			return protocol.Command{}, errors.New("only the stable distribution driver channel is supported")
 		}
-		if request.DriverUpdate.Vendor != "NVIDIA" && request.DriverUpdate.Vendor != "AMD" {
-			return protocol.Command{}, errors.New("GPU driver vendor must be NVIDIA or AMD")
+		if request.DriverUpdate.Vendor != "NVIDIA" && request.DriverUpdate.Vendor != "AMD" && request.DriverUpdate.Vendor != "INTEL" {
+			return protocol.Command{}, errors.New("GPU driver vendor must be NVIDIA, AMD, or Intel")
+		}
+		request.DriverUpdate.Package = strings.TrimSpace(request.DriverUpdate.Package)
+		request.DriverUpdate.Version = strings.TrimSpace(request.DriverUpdate.Version)
+		if request.DriverUpdate.Package == "" || request.DriverUpdate.Version == "" {
+			return protocol.Command{}, errors.New("an exact GPU driver package and version are required")
+		}
+		if !validDriverPackageForVendor(request.DriverUpdate.Vendor, request.DriverUpdate.Package) {
+			return protocol.Command{}, fmt.Errorf("package %q is not a supported %s driver package", request.DriverUpdate.Package, request.DriverUpdate.Vendor)
+		}
+		if strings.HasPrefix(request.DriverUpdate.Version, "-") || strings.ContainsAny(request.DriverUpdate.Version, " \t\r\n/\\") {
+			return protocol.Command{}, errors.New("GPU driver version contains unsupported characters")
+		}
+	}
+	if request.Action == "gpu-driver-list" {
+		if request.DriverUpdate == nil {
+			return protocol.Command{}, errors.New("GPU driver vendor settings are required")
+		}
+		request.DriverUpdate.Vendor = strings.ToUpper(strings.TrimSpace(request.DriverUpdate.Vendor))
+		if request.DriverUpdate.Channel != "stable" {
+			return protocol.Command{}, errors.New("only the stable distribution driver channel is supported")
+		}
+		if request.DriverUpdate.Vendor != "NVIDIA" && request.DriverUpdate.Vendor != "AMD" && request.DriverUpdate.Vendor != "INTEL" {
+			return protocol.Command{}, errors.New("GPU driver vendor must be NVIDIA, AMD, or Intel")
 		}
 	}
 	id, err := randomToken(12)
@@ -388,7 +433,7 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 		return protocol.Command{}, err
 	}
 	command := protocol.Command{
-		ID: id, Action: request.Action, Profile: request.Profile, SmartTune: request.SmartTune, DriverUpdate: request.DriverUpdate,
+		ID: id, Action: request.Action, ShellCommand: request.ShellCommand, Profile: request.Profile, SmartTune: request.SmartTune, DriverUpdate: request.DriverUpdate,
 		CreatedAt: time.Now().UTC(), Status: "pending",
 	}
 	s.mu.Lock()
@@ -397,12 +442,26 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 	if !ok {
 		return protocol.Command{}, ErrNotFound
 	}
+	if request.Action == "shell-command" &&
+		(rig.LastHeartbeat.IsZero() || time.Since(rig.LastHeartbeat) >= 30*time.Second) {
+		return protocol.Command{}, errors.New("shell commands require an online rig")
+	}
+	if request.Action == "smart-tune" && s.state.GPUPowerPolicy.MaxPowerW > 0 {
+		tune := *request.SmartTune
+		if tune.MaxPowerW == 0 || tune.MaxPowerW > s.state.GPUPowerPolicy.MaxPowerW {
+			tune.MaxPowerW = s.state.GPUPowerPolicy.MaxPowerW
+		}
+		command.SmartTune = &tune
+	}
 	if request.Action == "smart-tune" {
 		if len(rig.Metrics.GPUs) == 0 || !rig.Metrics.Miner.Running {
 			return protocol.Command{}, errors.New("smart tune requires an online GPU rig with a running miner")
 		}
 		if !rig.Metrics.SmartTuneSupported {
 			return protocol.Command{}, errors.New("smart tune requires the latest rig agent")
+		}
+		if err := validateSmartTuneTelemetry(rig.Metrics); err != nil {
+			return protocol.Command{}, err
 		}
 		if rig.Desired.OverclockProfileID == "" {
 			return protocol.Command{}, errors.New("smart tune requires an assigned overclock profile")
@@ -422,14 +481,23 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 				return protocol.Command{}, errors.New("smart tune is already running on this rig")
 			}
 		}
-		for _, summary := range s.driverEfficiencySummariesLocked(&rig.Rig) {
-			if strings.EqualFold(summary.Vendor, request.DriverUpdate.Vendor) &&
-				summary.Status == "current-best" && summary.ComparedDrivers > 1 {
-				return protocol.Command{}, fmt.Errorf(
-					"performance guard blocked the update: driver %s is the best locally tested %s driver for %s on %s",
-					summary.CurrentDriver, summary.Vendor, summary.Coin, summary.Model,
-				)
+	}
+	if request.Action == "gpu-driver-list" {
+		if rig.LastHeartbeat.IsZero() || time.Since(rig.LastHeartbeat) >= 30*time.Second {
+			return protocol.Command{}, errors.New("GPU driver discovery requires an online rig")
+		}
+		if !rig.Metrics.DriverUpdateSupported {
+			return protocol.Command{}, errors.New("GPU driver discovery requires the latest rig agent")
+		}
+		foundVendor := false
+		for _, gpu := range rig.Metrics.GPUs {
+			if strings.EqualFold(gpu.Vendor, request.DriverUpdate.Vendor) {
+				foundVendor = true
+				break
 			}
+		}
+		if !foundVendor {
+			return protocol.Command{}, fmt.Errorf("this rig has no %s GPUs", request.DriverUpdate.Vendor)
 		}
 	}
 	if request.Action == "gpu-driver-update" {
@@ -449,6 +517,15 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 		if !foundVendor {
 			return protocol.Command{}, fmt.Errorf("this rig has no %s GPUs", request.DriverUpdate.Vendor)
 		}
+		for _, summary := range s.driverEfficiencySummariesLocked(&rig.Rig) {
+			if strings.EqualFold(summary.Vendor, request.DriverUpdate.Vendor) &&
+				summary.Status == "current-best" && summary.ComparedDrivers > 1 {
+				return protocol.Command{}, fmt.Errorf(
+					"performance guard blocked the update: driver %s is the best locally tested %s driver for %s on %s",
+					summary.CurrentDriver, summary.Vendor, summary.Coin, summary.Model,
+				)
+			}
+		}
 		for _, existing := range rig.Commands {
 			if existing.Action == "gpu-driver-update" && (existing.Status == "pending" || existing.Status == "running") {
 				return protocol.Command{}, errors.New("a GPU driver update is already queued or running on this rig")
@@ -467,6 +544,9 @@ func (s *Store) AddCommandRequest(rigID string, request protocol.CommandRequest)
 func (s *Store) AddCommands(rigIDs []string, action, profile string) ([]protocol.Command, error) {
 	if !validCommandAction(action) {
 		return nil, errors.New("unsupported command action")
+	}
+	if action == "shell-command" {
+		return nil, errors.New("shell commands must target one rig")
 	}
 	if action == "smart-tune" {
 		return nil, errors.New("smart tune must be started on one rig at a time")
@@ -497,8 +577,36 @@ func (s *Store) AddCommands(rigIDs []string, action, profile string) ([]protocol
 
 func validCommandAction(action string) bool {
 	switch action {
-	case "start", "stop", "restart", "reboot", "shutdown", "logs", "smart-tune", "stop-smart-tune", "gpu-driver-update":
+	case "start", "stop", "restart", "reboot", "shutdown", "logs", "smart-tune", "stop-smart-tune", "gpu-driver-update", "gpu-driver-list", "shell-command":
 		return true
+	default:
+		return false
+	}
+}
+
+func validDriverPackageForVendor(vendor, packageName string) bool {
+	switch vendor {
+	case "NVIDIA":
+		if packageName == "hiveos-nvidia-driver" {
+			return true
+		}
+		suffix, found := strings.CutPrefix(packageName, "nvidia-driver-")
+		if !found || suffix == "" {
+			return false
+		}
+		for _, character := range suffix {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+		return true
+	case "AMD":
+		return packageName == "linux-firmware" || packageName == "amdgpu-dkms"
+	case "INTEL":
+		return packageName == "linux-firmware" ||
+			packageName == "intel-media-va-driver" ||
+			packageName == "intel-media-va-driver-non-free" ||
+			packageName == "intel-level-zero-gpu"
 	default:
 		return false
 	}
@@ -585,9 +693,11 @@ func (s *Store) FinishCommandResult(rigID, commandID string, result protocol.Com
 				} else if err := applySmartTuneSettings(&profile, result.TunedSettings); err != nil {
 					result.Error = err.Error()
 				} else {
+					capOverclockProfilePower(&profile, s.state.GPUPowerPolicy.MaxPowerW)
 					s.state.OverclockProfiles[profile.ID] = profile
 					rig.Desired.Revision++
 				}
+
 			}
 			if result.Error != "" {
 				rig.Commands[i].Status = "failed"
@@ -601,6 +711,17 @@ func (s *Store) FinishCommandResult(rigID, commandID string, result protocol.Com
 	return ErrNotFound
 }
 
+func capOverclockProfilePower(profile *protocol.OverclockProfile, maximum int) {
+	if maximum <= 0 {
+		return
+	}
+	for index := range profile.Settings {
+		if profile.Settings[index].PowerLimitW == 0 || profile.Settings[index].PowerLimitW > maximum {
+			profile.Settings[index].PowerLimitW = maximum
+		}
+	}
+}
+
 func (s *Store) overclockProfileIsSharedLocked(profileID, rigID string) bool {
 	for otherRigID, otherRig := range s.state.Rigs {
 		if otherRigID != rigID && otherRig.Desired.OverclockProfileID == profileID {
@@ -610,13 +731,35 @@ func (s *Store) overclockProfileIsSharedLocked(profileID, rigID string) bool {
 	return false
 }
 
+// validateSmartTuneTelemetry rejects Smart Tune before it is queued when the rig
+// cannot supply the per-GPU power and hashrate readings the benchmark compares,
+// so the operator sees an actionable reason instead of a silent failure minutes later.
+func validateSmartTuneTelemetry(metrics protocol.Metrics) error {
+	for _, gpu := range metrics.GPUs {
+		if gpu.Power <= 0 {
+			return fmt.Errorf("smart tune needs power telemetry: GPU %d is not reporting power draw yet", gpu.Index)
+		}
+		hashrate := 0.0
+		for _, device := range metrics.Miner.Devices {
+			if device.Index == gpu.Index && strings.EqualFold(device.Kind, "GPU") {
+				hashrate = device.Hashrate
+				break
+			}
+		}
+		if hashrate <= 0 {
+			return fmt.Errorf("smart tune needs per-GPU hashrates: the miner is not reporting a hashrate for GPU %d yet", gpu.Index)
+		}
+	}
+	return nil
+}
+
 func applySmartTuneSettings(profile *protocol.OverclockProfile, tuned []protocol.GPUOverclock) error {
 	if profile.Vendor != "NVIDIA" || len(tuned) == 0 {
 		return errors.New("smart tune returned no NVIDIA settings")
 	}
 	bySelector := make(map[string]int, len(tuned))
 	for _, setting := range tuned {
-		if setting.Selector == "" || setting.PowerLimitW <= 0 || setting.PowerLimitW > 115 {
+		if setting.Selector == "" || setting.PowerLimitW <= 0 {
 			return errors.New("smart tune returned an invalid or unsafe power limit")
 		}
 		bySelector[setting.Selector] = setting.PowerLimitW

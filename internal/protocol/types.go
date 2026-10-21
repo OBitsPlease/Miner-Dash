@@ -12,6 +12,7 @@ type GPU struct {
 	Firmware    string  `json:"firmware,omitempty"`
 	Temperature float64 `json:"temperature_c"`
 	Power       float64 `json:"power_w"`
+	PowerLimit  float64 `json:"power_limit_w,omitempty"`
 	Fan         float64 `json:"fan_percent,omitempty"`
 	Utilization float64 `json:"utilization_percent"`
 	MemoryUsed  uint64  `json:"memory_used_bytes"`
@@ -21,22 +22,58 @@ type GPU struct {
 }
 
 type Metrics struct {
-	CollectedAt           time.Time        `json:"collected_at"`
-	Uptime                uint64           `json:"uptime_seconds"`
-	CPUUsage              float64          `json:"cpu_usage_percent"`
-	CPUTemperature        float64          `json:"cpu_temperature_c,omitempty"`
-	Load1                 float64          `json:"load_1"`
-	MemoryUsed            uint64           `json:"memory_used_bytes"`
-	MemoryTotal           uint64           `json:"memory_total_bytes"`
-	GPUs                  []GPU            `json:"gpus"`
-	Miner                 MinerState       `json:"miner"`
-	SmartTune             *SmartTuneStatus `json:"smart_tune,omitempty"`
-	SmartTuneSupported    bool             `json:"smart_tune_supported,omitempty"`
-	DriverUpdateSupported bool             `json:"driver_update_supported,omitempty"`
-	MiningCoin            string           `json:"mining_coin,omitempty"`
-	MiningAlgorithm       string           `json:"mining_algorithm,omitempty"`
-	AppliedRevision       uint64           `json:"applied_revision"`
-	System                SystemInfo       `json:"system"`
+	CollectedAt             time.Time              `json:"collected_at"`
+	Uptime                  uint64                 `json:"uptime_seconds"`
+	CPUUsage                float64                `json:"cpu_usage_percent"`
+	CPUTemperature          float64                `json:"cpu_temperature_c,omitempty"`
+	Load1                   float64                `json:"load_1"`
+	MemoryUsed              uint64                 `json:"memory_used_bytes"`
+	MemoryTotal             uint64                 `json:"memory_total_bytes"`
+	GPUs                    []GPU                  `json:"gpus"`
+	Miner                   MinerState             `json:"miner"`
+	SmartTune               *SmartTuneStatus       `json:"smart_tune,omitempty"`
+	SmartTuneSupported      bool                   `json:"smart_tune_supported,omitempty"`
+	DriverUpdateSupported   bool                   `json:"driver_update_supported,omitempty"`
+	CPUOptimization         *CPUOptimizationStatus `json:"cpu_optimization,omitempty"`
+	MiningCoin              string                 `json:"mining_coin,omitempty"`
+	MiningAlgorithm         string                 `json:"mining_algorithm,omitempty"`
+	MiningState             string                 `json:"mining_state,omitempty"`
+	MiningReason            string                 `json:"mining_reason,omitempty"`
+	PrimaryMiningCoin       string                 `json:"primary_mining_coin,omitempty"`
+	PrimaryMiningAlgorithm  string                 `json:"primary_mining_algorithm,omitempty"`
+	ObservedMiningAlgorithm string                 `json:"observed_mining_algorithm,omitempty"`
+	MiningHeight            uint64                 `json:"mining_height,omitempty"`
+	AppliedRevision         uint64                 `json:"applied_revision"`
+	ConfigurationError      string                 `json:"configuration_error,omitempty"`
+	System                  SystemInfo             `json:"system"`
+}
+
+type CPUOptimizationStatus struct {
+	Enabled            bool              `json:"enabled"`
+	Phase              string            `json:"phase"`
+	Message            string            `json:"message,omitempty"`
+	Coin               string            `json:"coin,omitempty"`
+	Algorithm          string            `json:"algorithm,omitempty"`
+	HugePagesTotal     uint64            `json:"huge_pages_total"`
+	HugePagesFree      uint64            `json:"huge_pages_free"`
+	HugePageSizeBytes  uint64            `json:"huge_page_size_bytes"`
+	HugePagesCandidate bool              `json:"huge_pages_candidate"`
+	MSRModuleLoaded    bool              `json:"msr_module_loaded"`
+	MSRAccessible      bool              `json:"msr_accessible"`
+	MSRWarning         bool              `json:"msr_warning"`
+	MinerWarnings      []string          `json:"miner_warnings,omitempty"`
+	Governors          map[string]string `json:"governors,omitempty"`
+	NUMANodes          int               `json:"numa_nodes"`
+	CPUThreads         int               `json:"cpu_threads"`
+	MinerThreads       int               `json:"miner_threads"`
+	BaselineHashrate   float64           `json:"baseline_hashrate,omitempty"`
+	TrialHashrate      float64           `json:"trial_hashrate,omitempty"`
+	BaselineSamples    int               `json:"baseline_samples"`
+	TrialSamples       int               `json:"trial_samples"`
+	ImprovementPercent float64           `json:"improvement_percent,omitempty"`
+	Applied            []string          `json:"applied,omitempty"`
+	Skipped            []string          `json:"skipped,omitempty"`
+	LastError          string            `json:"last_error,omitempty"`
 }
 
 type SystemInfo struct {
@@ -93,6 +130,7 @@ type Rig struct {
 	Metrics          Metrics                    `json:"metrics"`
 	DriverEfficiency []DriverEfficiencySummary  `json:"driver_efficiency,omitempty"`
 	OverclockPresets []OverclockKnowledgePreset `json:"overclock_presets,omitempty"`
+	SmartTuneCommand *Command                   `json:"smart_tune_command,omitempty"`
 	FarmID           string                     `json:"farm_id,omitempty"`
 	Tags             []string                   `json:"tags"`
 	Desired          DesiredConfiguration       `json:"desired"`
@@ -149,6 +187,7 @@ type DriverEfficiencySummary struct {
 type Command struct {
 	ID           string               `json:"id"`
 	Action       string               `json:"action"`
+	ShellCommand string               `json:"shell_command,omitempty"`
 	Profile      string               `json:"profile,omitempty"`
 	SmartTune    *SmartTuneRequest    `json:"smart_tune,omitempty"`
 	DriverUpdate *DriverUpdateRequest `json:"driver_update,omitempty"`
@@ -162,6 +201,7 @@ type Command struct {
 
 type CommandRequest struct {
 	Action       string               `json:"action"`
+	ShellCommand string               `json:"shell_command,omitempty"`
 	Profile      string               `json:"profile,omitempty"`
 	SmartTune    *SmartTuneRequest    `json:"smart_tune,omitempty"`
 	DriverUpdate *DriverUpdateRequest `json:"driver_update,omitempty"`
@@ -170,6 +210,8 @@ type CommandRequest struct {
 type DriverUpdateRequest struct {
 	Vendor  string `json:"vendor"`
 	Channel string `json:"channel"`
+	Package string `json:"package,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 type BulkCommandRequest struct {
@@ -253,29 +295,38 @@ type MinerDefinition struct {
 }
 
 type MinerCatalogEntry struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	Description        string    `json:"description"`
-	Hardware           []string  `json:"hardware"`
-	License            string    `json:"license"`
-	Redistribution     string    `json:"redistribution"`
-	SourceURL          string    `json:"source_url"`
-	BinaryName         string    `json:"binary_name"`
-	DefaultArguments   []string  `json:"default_arguments"`
-	AlgorithmFlag      string    `json:"algorithm_flag"`
-	PackageRequired    bool      `json:"package_required"`
-	ImageIncluded      bool      `json:"image_included"`
-	AutomaticInstall   bool      `json:"automatic_install"`
-	InstalledMinerID   string    `json:"installed_miner_id,omitempty"`
-	InstalledVersion   string    `json:"installed_version,omitempty"`
-	LatestVersion      string    `json:"latest_version,omitempty"`
-	LatestReleaseURL   string    `json:"latest_release_url,omitempty"`
-	LatestReleaseNotes string    `json:"latest_release_notes,omitempty"`
-	LatestPublishedAt  time.Time `json:"latest_published_at,omitempty"`
-	UpdateAvailable    bool      `json:"update_available"`
-	ReleaseCheckedAt   time.Time `json:"release_checked_at,omitempty"`
-	ReleaseCheckError  string    `json:"release_check_error,omitempty"`
-	PackageReady       bool      `json:"package_ready"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Version            string            `json:"version,omitempty"`
+	Description        string            `json:"description"`
+	Hardware           []string          `json:"hardware"`
+	License            string            `json:"license"`
+	Redistribution     string            `json:"redistribution"`
+	SourceURL          string            `json:"source_url"`
+	SourceCommit       string            `json:"source_commit,omitempty"`
+	BinaryName         string            `json:"binary_name"`
+	Algorithm          string            `json:"algorithm,omitempty"`
+	DefaultArguments   []string          `json:"default_arguments"`
+	AlgorithmFlag      string            `json:"algorithm_flag"`
+	PackageFormat      string            `json:"package_format,omitempty"`
+	EntryPoint         string            `json:"entry_point,omitempty"`
+	PackageSHA256      string            `json:"package_sha256,omitempty"`
+	Environment        map[string]string `json:"environment,omitempty"`
+	StatsType          string            `json:"stats_type,omitempty"`
+	StatsURL           string            `json:"stats_url,omitempty"`
+	PackageRequired    bool              `json:"package_required"`
+	ImageIncluded      bool              `json:"image_included"`
+	AutomaticInstall   bool              `json:"automatic_install"`
+	InstalledMinerID   string            `json:"installed_miner_id,omitempty"`
+	InstalledVersion   string            `json:"installed_version,omitempty"`
+	LatestVersion      string            `json:"latest_version,omitempty"`
+	LatestReleaseURL   string            `json:"latest_release_url,omitempty"`
+	LatestReleaseNotes string            `json:"latest_release_notes,omitempty"`
+	LatestPublishedAt  time.Time         `json:"latest_published_at,omitempty"`
+	UpdateAvailable    bool              `json:"update_available"`
+	ReleaseCheckedAt   time.Time         `json:"release_checked_at,omitempty"`
+	ReleaseCheckError  string            `json:"release_check_error,omitempty"`
+	PackageReady       bool              `json:"package_ready"`
 }
 
 type CustomMinerImport struct {
@@ -340,26 +391,29 @@ type RigOSStatus struct {
 }
 
 type FlightSheet struct {
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name"`
-	Coin                 string    `json:"coin"`
-	DeviceType           string    `json:"device_type,omitempty"`
-	Algorithm            string    `json:"algorithm,omitempty"`
-	WalletID             string    `json:"wallet_id"`
-	PoolID               string    `json:"pool_id"`
-	MinerID              string    `json:"miner_id"`
-	SecondaryCoin        string    `json:"secondary_coin,omitempty"`
-	SecondaryDeviceType  string    `json:"secondary_device_type,omitempty"`
-	SecondaryAlgorithm   string    `json:"secondary_algorithm,omitempty"`
-	SecondaryWalletID    string    `json:"secondary_wallet_id,omitempty"`
-	SecondaryPoolID      string    `json:"secondary_pool_id,omitempty"`
-	PoolURLOverride      string    `json:"pool_url_override,omitempty"`
-	BackupPoolURLs       []string  `json:"backup_pool_urls,omitempty"`
-	PoolPasswordOverride string    `json:"pool_password_override,omitempty"`
-	WalletTemplate       string    `json:"wallet_template,omitempty"`
-	WorkerName           string    `json:"worker_name,omitempty"`
-	ExtraArguments       []string  `json:"extra_arguments,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Coin                  string    `json:"coin"`
+	DeviceType            string    `json:"device_type,omitempty"`
+	Algorithm             string    `json:"algorithm,omitempty"`
+	WalletID              string    `json:"wallet_id"`
+	PoolID                string    `json:"pool_id"`
+	MinerID               string    `json:"miner_id"`
+	SecondaryCoin         string    `json:"secondary_coin,omitempty"`
+	SecondaryDeviceType   string    `json:"secondary_device_type,omitempty"`
+	SecondaryAlgorithm    string    `json:"secondary_algorithm,omitempty"`
+	SecondaryWalletID     string    `json:"secondary_wallet_id,omitempty"`
+	SecondaryPoolID       string    `json:"secondary_pool_id,omitempty"`
+	PoolURLOverride       string    `json:"pool_url_override,omitempty"`
+	BackupPoolURLs        []string  `json:"backup_pool_urls,omitempty"`
+	PoolPasswordOverride  string    `json:"pool_password_override,omitempty"`
+	WalletTemplate        string    `json:"wallet_template,omitempty"`
+	WorkerName            string    `json:"worker_name,omitempty"`
+	ExtraArguments        []string  `json:"extra_arguments,omitempty"`
+	FallbackFlightSheetID string    `json:"fallback_flight_sheet_id,omitempty"`
+	FailoverAfterSeconds  int       `json:"failover_after_seconds,omitempty"`
+	ReturnAfterSeconds    int       `json:"return_after_seconds,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
 }
 
 type QuickFlightSheetInput struct {
@@ -425,15 +479,33 @@ type DesiredConfiguration struct {
 }
 
 type ResolvedConfiguration struct {
-	Revision   uint64           `json:"revision"`
-	Miner      MinerDefinition  `json:"miner"`
-	Wallet     Wallet           `json:"wallet"`
-	Pool       Pool             `json:"pool"`
-	MiningUser string           `json:"mining_user,omitempty"`
-	WorkerName string           `json:"worker_name,omitempty"`
-	Overclock  OverclockProfile `json:"overclock"`
-	Watchdog   WatchdogPolicy   `json:"watchdog"`
-	Autofan    AutofanPolicy    `json:"autofan"`
+	Revision             uint64            `json:"revision"`
+	GPUPowerLimitW       int               `json:"gpu_power_limit_w,omitempty"`
+	Miner                MinerDefinition   `json:"miner"`
+	Wallet               Wallet            `json:"wallet"`
+	Pool                 Pool              `json:"pool"`
+	MiningUser           string            `json:"mining_user,omitempty"`
+	WorkerName           string            `json:"worker_name,omitempty"`
+	Fallback             *ResolvedWorkload `json:"fallback,omitempty"`
+	FailoverAfterSeconds int               `json:"failover_after_seconds,omitempty"`
+	ReturnAfterSeconds   int               `json:"return_after_seconds,omitempty"`
+	Overclock            OverclockProfile  `json:"overclock"`
+	Watchdog             WatchdogPolicy    `json:"watchdog"`
+	Autofan              AutofanPolicy     `json:"autofan"`
+}
+
+type GPUPowerPolicy struct {
+	MaxPowerW int `json:"max_power_w"`
+}
+
+type ResolvedWorkload struct {
+	Coin       string          `json:"coin"`
+	Algorithm  string          `json:"algorithm"`
+	Miner      MinerDefinition `json:"miner"`
+	Wallet     Wallet          `json:"wallet"`
+	Pool       Pool            `json:"pool"`
+	MiningUser string          `json:"mining_user,omitempty"`
+	WorkerName string          `json:"worker_name,omitempty"`
 }
 
 type WorkerAssignment struct {

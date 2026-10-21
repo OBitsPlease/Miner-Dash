@@ -28,7 +28,7 @@ const navigationGroupViews = {
   farms: ["farms"],
   mining: ["gpu-mining", "cpu-mining", "flight-sheets", "wallets", "mining-software", "pools", "custom-miners"],
   operations: ["schedules", "alerts", "activity"],
-  discover: ["power-prices", "new-coins"],
+  discover: discoverViews,
   system: ["rig-os", "users", "miners", "overclocks"]
 };
 const navigationCloseTimers = new WeakMap();
@@ -188,9 +188,9 @@ const definitions = {
   },
   "flight-sheets": {
     title: "Flight Sheets", description: "Reusable wallet, pool, miner, and algorithm assignments",
-    endpoint: "flight-sheets", columns: [["name", "Name"], ["device_type", "Type"], ["coin", "Coin"], ["algorithm", "Algorithm"], ["wallet_id", "Wallet"], ["pool_id", "Pool"], ["miner_id", "Miner"], ["secondary_coin", "Second coin"]],
+    endpoint: "flight-sheets", columns: [["name", "Name"], ["device_type", "Type"], ["coin", "Coin"], ["algorithm", "Algorithm"], ["wallet_id", "Wallet"], ["pool_id", "Pool"], ["miner_id", "Miner"], ["fallback_flight_sheet_id", "Fallback"], ["secondary_coin", "Second coin"]],
     fields: [["name", "Name", "text", true], ["device_type", "Primary workload", "device-select", true], ["coin", "Primary coin", "text"], ["algorithm", "Primary algorithm", "text", true], ["wallet_id", "Primary wallet", "wallet-select", true], ["pool_id", "Primary pool", "pool-select", true], ["miner_id", "Miner", "miner-select", true], ["secondary_device_type", "Second workload (SRBMiner only)", "device-select"], ["secondary_coin", "Second coin", "text"], ["secondary_algorithm", "Second algorithm", "text"], ["secondary_wallet_id", "Second wallet", "wallet-select"], ["secondary_pool_id", "Second pool", "pool-select"]],
-    detailedFields: [["wallet_template", "Wallet format — {WALLET} uses the selected wallet", "text", false, "wide"], ["worker_name", "Fixed worker name (blank uses rig name)", "text"], ["pool_url_override", "Temporary primary pool URL override", "text", false, "wide"], ["backup_pool_urls", "Backup pool URLs, one per line", "textarea", false, "wide"], ["pool_password_override", "Temporary pool password override", "text"], ["extra_arguments", "Extra miner arguments, one per line", "textarea", false, "wide"]]
+    detailedFields: [["fallback_flight_sheet_id", "Automatic fallback flight sheet (Epic CPU)", "flight-select", false, "wide"], ["failover_after_seconds", "Switch after unavailable seconds (0 = 10)", "number"], ["return_after_seconds", "Return after stable seconds (0 = 15)", "number"], ["wallet_template", "Wallet format — {WALLET} uses the selected wallet", "text", false, "wide"], ["worker_name", "Fixed worker name (blank uses rig name)", "text"], ["pool_url_override", "Temporary primary pool URL override", "text", false, "wide"], ["backup_pool_urls", "Backup pool URLs, one per line", "textarea", false, "wide"], ["pool_password_override", "Temporary pool password override", "text"], ["extra_arguments", "Extra miner arguments, one per line", "textarea", false, "wide"]]
   },
   overclocks: {
     title: "Overclock Profiles", description: "Reusable, vendor-specific GPU tuning limits",
@@ -267,6 +267,7 @@ function formatHashrate(number, unit = "H/s") {
 const coinLogos = {
   BTC: "/coins/btc.svg", ETH: "/coins/eth.svg", ETC: "/coins/etc.svg",
   RVN: "/coins/rvn.svg", XMR: "/coins/xmr.svg", QRL: "/coins/qrl.svg",
+  EPIC: "/coins/epic.svg",
   ZCL: "/coins/zclassic-zcl-logo.png", VTC: "/coins/vertcoin-vtc-logo.png", YEC: "/coins/ycash-yec-logo.png"
 };
 
@@ -423,7 +424,7 @@ async function waitForControllerUpdate() {
 async function loadAll({preserveWorkerUI = false, silentAuthFailure = false} = {}) {
   const workerUI = preserveWorkerUI && ["workers", "gpu-mining", "cpu-mining", "farms"].includes(state.view) ? captureWorkerUI() : null;
   try {
-    const endpoints = ["rigs", "farms", "wallets", "pools", "miners", "flight-sheets", "overclock-profiles", "schedules", "alerts", "activity", "rig-os"];
+    const endpoints = ["rigs", "farms", "wallets", "pools", "miners", "flight-sheets", "overclock-profiles", "schedules", "alerts", "activity", "rig-os", "gpu-power-policy"];
     const values = await Promise.all(endpoints.map(endpoint => api(`/api/v1/${endpoint}`)));
     endpoints.forEach((endpoint, index) => state.data[endpoint] = values[index]);
     const minerUpdates = (state.data["rig-os"]?.miners || []).filter(miner => miner.update_available).length;
@@ -544,8 +545,8 @@ function updateFocusedRigCard(card, replacement) {
   card.classList.toggle("offline", replacement.classList.contains("offline"));
   card.dataset.rigKind = replacement.dataset.rigKind;
   [
-    ".rig-title-line", ".rig-meta", ".gpu-health-strip", ".rig-workload-summary", ".status", ".rig-metrics", ".gpu-list",
-    ".coin-price-card", ".system-detail-grid", ".miner-row", ".pool-health", ".smart-tune-status"
+    ".rig-title-line", ".rig-meta", ".rig-ip", ".gpu-health-strip", ".rig-workload-summary", ".status", ".rig-metrics", ".gpu-list",
+    ".coin-price-card", ".system-detail-grid", ".miner-row", ".pool-health", ".smart-tune-status", ".rig-troubleshooting", ".message"
   ].forEach(selector => {
     const current = card.querySelector(selector);
     const next = replacement.querySelector(selector);
@@ -557,6 +558,14 @@ function updateFocusedRigCard(card, replacement) {
   const nextMinerScreen = replacement.querySelector(".miner-screen");
   minerScreen.disabled = nextMinerScreen.disabled;
   minerScreen.title = nextMinerScreen.title;
+  [".smart-tune", ".stop-smart-tune"].forEach(selector => {
+    const current = card.querySelector(selector);
+    const next = replacement.querySelector(selector);
+    if (!current || !next) return;
+    current.className = next.className;
+    current.disabled = next.disabled;
+    current.title = next.title;
+  });
   fillWorkerSelect(card.querySelector(".focused-worker-select"), miningViewForRig(
     state.data.rigs.find(rig => rig.id === card.dataset.rigId)
   ), card.dataset.rigId);
@@ -673,21 +682,21 @@ function updateMiningSwitcher() {
   fillWorkerSelect($("#mining-worker-select"), state.view, state.focusedRigID);
 }
 
-function openRigFromSwitcher(rigID) {
+function openRigFromSwitcher(rigID, tab = "overview") {
   const rig = (state.data.rigs || []).find(item => item.id === rigID);
   if (!rig) return;
   state.view = miningViewForRig(rig);
   state.focusedRigID = rig.id;
-  state.focusedRigTab = "overview";
+  state.focusedRigTab = tab;
   render();
   const card = document.querySelector(`.rig-card.focused[data-rig-id="${CSS.escape(rig.id)}"]`);
-  if (card) loadRigPoolPerformance(card, rig);
+  if (card && tab === "mining") loadRigPoolPerformance(card, rig);
 }
 
 function render() {
   const workers = state.view === "workers";
   const rigOS = state.view === "rig-os";
-  const feature = ["mining-software", "power-prices", "new-coins"].includes(state.view);
+  const feature = state.view === "mining-software" || discoverViews.includes(state.view);
   const customMiners = state.view === "custom-miners";
   const mining = state.view === "gpu-mining" || state.view === "cpu-mining";
   const farms = state.view === "farms";
@@ -745,6 +754,12 @@ function renderMining() {
   const usedPools = [...new Set(sheets.map(sheet => sheet.pool_id))].map(id => pools[id]).filter(Boolean);
   const usedMiners = [...new Set(sheets.map(sheet => sheet.miner_id))].map(id => miners[id]).filter(Boolean);
   $("#mining-content").innerHTML = `
+    ${deviceType === "GPU" ? `<form id="gpu-power-policy-form" class="gpu-power-policy">
+      <div><span class="eyebrow">CONTROLLER-WIDE SAFETY LIMIT</span><strong>Maximum ${Number(state.data["gpu-power-policy"]?.max_power_w || 0) ? `${Number(state.data["gpu-power-policy"].max_power_w)} W per GPU` : "not set"}</strong>
+      <small>Applies to every GPU rig and flight sheet on this Miner Dash installation. Overclock profiles and Smart Tune cannot raise this ceiling. Enter 0 only to disable the controller-wide cap.</small></div>
+      <label>Maximum W per GPU<input name="max_power_w" type="number" min="0" max="600" step="1" value="${Number(state.data["gpu-power-policy"]?.max_power_w || 0)}" required></label>
+      <button type="submit">Save global GPU limit</button>
+    </form>` : ""}
     <div class="mining-hero ${deviceType.toLowerCase()}">
       <div><span class="eyebrow">${deviceType} WORKLOADS</span><h2>${deviceType} mining made simple</h2><p>Create the complete flight sheet without leaving this page.</p></div>
       <button id="new-mining-setup">+ New ${deviceType} mining setup</button>
@@ -762,6 +777,22 @@ function renderMining() {
   if (rigs.length) rigs.forEach(rig => rigGrid.append(renderRig(rig, sheetMap)));
   else rigGrid.innerHTML = `<div class="empty simple-empty">No ${deviceType} rigs have reported hardware yet.</div>`;
   bindExpandableRows($("#mining-content"), ".mining-sheet-card", `${deviceType.toLowerCase()}-mining-sheet`);
+  $("#gpu-power-policy-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const maximum = Number(event.currentTarget.elements.max_power_w.value);
+    if (!Number.isInteger(maximum) || maximum < 0 || maximum > 600) {
+      showNotice("GPU power limit must be a whole number from 0 to 600 watts.");
+      return;
+    }
+    try {
+      await api("/api/v1/gpu-power-policy", {
+        method: "PUT",
+        body: JSON.stringify({max_power_w: maximum})
+      });
+      await loadAll();
+      showNotice(maximum ? `Controller-wide GPU limit set to ${maximum} W per GPU.` : "Controller-wide GPU power cap disabled.");
+    } catch (error) { showNotice(error.message); }
+  });
   $("#new-mining-setup").addEventListener("click", () => openQuickSheet(deviceType));
   $$(".edit-sheet").forEach(button => button.addEventListener("click", () => {
     state.view = "flight-sheets";
@@ -783,6 +814,102 @@ function resourceSummary(title, records, describe) {
 
 function shortValue(value = "") {
   return value.length > 24 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value || "—";
+}
+
+const quickAlgorithmRequests = {primary: 0, secondary: 0};
+const quickAlgorithmTimers = {primary: 0, secondary: 0};
+const quickAlgorithmState = {primary: null, secondary: null};
+
+function scheduleQuickSheetAlgorithmSync(secondary = false) {
+  const key = secondary ? "secondary" : "primary";
+  clearTimeout(quickAlgorithmTimers[key]);
+  quickAlgorithmState[key] = null;
+  quickAlgorithmTimers[key] = setTimeout(() => syncQuickSheetAlgorithmOptions(secondary), 250);
+}
+
+async function syncQuickSheetAlgorithmOptions(secondary = false) {
+  const form = document.getElementById("quick-sheet-form");
+  if (!form) return;
+  const list = document.getElementById(secondary ? "secondary-algorithm-options" : "algorithm-options");
+  const algorithm = form.elements[secondary ? "secondary_algorithm" : "algorithm"];
+  const coin = form.elements[secondary ? "secondary_coin" : "coin"].value.trim();
+  const deviceType = form.elements[secondary ? "secondary_device_type" : "device_type"].value;
+  const [minerKind = "", minerID = ""] = String(form.elements.miner_choice.value || "").split(":");
+  if (!list || !algorithm) return;
+  const requestKey = secondary ? "secondary" : "primary";
+  const requestID = ++quickAlgorithmRequests[requestKey];
+  quickAlgorithmState[requestKey] = null;
+  const help = secondary ? null : document.getElementById("quick-algorithm-help");
+  if (help) help.textContent = coin ? "Looking up the coin algorithm…" : "Choose a coin to autofill its algorithm.";
+  const query = new URLSearchParams({
+    coin,
+    device_type: deviceType,
+    miner_kind: minerKind,
+    miner_id: minerID
+  });
+  try {
+    const payload = await api(`/api/v1/flight-sheet-algorithms?${query}`);
+    if (requestID !== quickAlgorithmRequests[requestKey]) return;
+    quickAlgorithmState[requestKey] = payload;
+    const values = [];
+    const coinKnown = (payload.coin_algorithms || []).length > 0;
+    const applicable = coinKnown ? (payload.compatible_algorithms || []) : (payload.miner_algorithms || []);
+    [payload.resolved_algorithm, ...applicable].forEach(value => {
+      value = String(value || "").trim();
+      if (value && !values.some(existing => existing.toLowerCase() === value.toLowerCase())) values.push(value);
+    });
+    list.replaceChildren(...values.map(value => new Option(value)));
+    if (payload.resolved_algorithm) {
+      if (!algorithm.value.trim() || algorithm.dataset.autofilled === "true") {
+        algorithm.value = payload.resolved_algorithm;
+        algorithm.dataset.autofilled = "true";
+      }
+    } else if (algorithm.dataset.autofilled === "true") {
+      algorithm.value = "";
+      algorithm.dataset.autofilled = "false";
+    }
+    if (!help) return;
+    if (payload.resolved_algorithm) {
+      help.textContent = `Autofilled ${payload.resolved_algorithm} from ${payload.resolution_source}. The dropdown contains algorithms supported by the selected miner.`;
+    } else if ((payload.coin_algorithms || []).length) {
+      help.textContent = `${payload.resolution_source} reports ${(payload.coin_algorithms || []).join(", ")}, but the selected miner does not support it. Choose different mining software.`;
+    } else if (values.length) {
+      help.textContent = payload.resolution_error
+        ? `${payload.resolution_error}. Choose from the selected miner's refreshed algorithm list.`
+        : "This coin was not found on MiningPoolStats or New Listings. Choose from the selected miner's refreshed algorithm list.";
+    } else if (minerKind === "custom") {
+      help.textContent = "Custom software has no published capability list. Enter the exact algorithm accepted by that miner.";
+    } else {
+      help.textContent = "Choose mining software to load its supported algorithms.";
+    }
+  } catch (error) {
+    if (requestID !== quickAlgorithmRequests[requestKey]) return;
+    quickAlgorithmState[requestKey] = null;
+    list.replaceChildren();
+    if (help) help.textContent = `Algorithm lookup failed: ${error.message}`;
+  }
+
+  function quickAlgorithmValidationError(form, secondary = false) {
+    const choice = String(form.elements.miner_choice.value || "");
+    if (choice.startsWith("custom:")) return "";
+    const key = secondary ? "secondary" : "primary";
+    const payload = quickAlgorithmState[key];
+    const algorithm = form.elements[secondary ? "secondary_algorithm" : "algorithm"].value.trim();
+    if (!payload) return "Wait for the algorithm lookup to finish.";
+    const coinKnown = (payload.coin_algorithms || []).length > 0;
+    const allowed = coinKnown ? (payload.compatible_algorithms || []) : (payload.miner_algorithms || []);
+    if (!allowed.length) {
+      return coinKnown
+        ? "The selected mining software does not support this coin's reported algorithm."
+        : "No supported algorithm list is available for the selected mining software.";
+    }
+    if (!allowed.some(value => String(value).toLowerCase() === algorithm.toLowerCase())) {
+      return coinKnown
+        ? `Use the algorithm identified by ${payload.resolution_source}.`
+        : "Choose an algorithm from the selected mining software's dropdown.";
+    }
+    return "";
+  }
 }
 
 function bindExpandableRows(root, selector, namespace) {
@@ -825,6 +952,10 @@ function bindExpandableRows(root, selector, namespace) {
 function openQuickSheet(deviceType) {
   const form = $("#quick-sheet-form");
   form.reset();
+  form.elements.algorithm.dataset.autofilled = "false";
+  form.elements.secondary_algorithm.dataset.autofilled = "false";
+  quickAlgorithmState.primary = null;
+  quickAlgorithmState.secondary = null;
   form.elements.custom_wallet_template.value = "{WALLET}.{WORKER}";
   $("#quick-device-type").value = deviceType;
   $("#quick-sheet-title").textContent = `New ${deviceType} mining setup`;
@@ -836,13 +967,15 @@ function openQuickSheet(deviceType) {
   const minerSelect = form.elements.miner_choice;
   minerSelect.replaceChildren(new Option("Choose mining software…", ""));
   catalog.forEach(entry => {
-    const status = entry.package_ready || entry.image_included ? "ready" : "installs automatically";
+    const status = entry.package_ready || entry.image_included ? "ready" :
+      entry.package_sha256 ? "verified package included" : "installs automatically";
     minerSelect.add(new Option(`${entry.name} — ${status}`, `catalog:${entry.id}`));
   });
   (state.data["community-miners"]?.miners || []).filter(entry =>
     deviceType === "CPU" ? entry.hardware.includes("CPU") : entry.hardware.some(hardware => hardware !== "CPU")
   ).forEach(entry => minerSelect.add(new Option(`${entry.name} ${entry.version} — Miner Dash registry`, `community:${entry.id}`)));
   minerSelect.add(new Option("Custom Miner — install from HTTPS link", "custom:new"));
+  syncQuickSheetAlgorithmOptions();
   form.elements.wallet_choice.replaceChildren(new Option("Enter a new wallet…", ""));
   (state.data.wallets || []).forEach(wallet => form.elements.wallet_choice.add(new Option(`${wallet.coin} — ${shortValue(wallet.address)}`, wallet.id)));
   form.elements.pool_choice.replaceChildren(new Option("Enter a new pool…", ""));
@@ -889,14 +1022,16 @@ function updateQuickMinerHelp() {
     $("#secondary-workload").classList.add("hidden");
     setSecondaryRequired(false);
   }
+  syncQuickSheetAlgorithmOptions();
   if (custom) {
     help.textContent = "MinerDash will fetch the public HTTPS package, extract only the named executable, calculate its SHA-256, and push that pinned file to selected rigs.";
     return;
   }
   const entry = kind === "catalog" ? (state.data["rig-os"]?.miners || []).find(item => item.id === id) : null;
   help.textContent = entry?.package_ready || entry?.image_included
-    ? `${entry.name} is ready on Rig OS.`
-    : entry?.automatic_install ? `${entry.name} will be downloaded from its official release repository, verified, and sent to the selected rigs.` : "Custom miner configuration selected.";
+    ? `${entry.name} is ready on Rig OS. Its supported algorithm dropdown is refreshed by the controller.`
+    : entry?.package_sha256 ? `${entry.name} uses the SHA-256-pinned package included with this controller. Its supported algorithm dropdown is refreshed by the controller.` :
+      entry?.automatic_install ? `${entry.name} will be downloaded from its official release repository, verified, and sent to the selected rigs. Its supported algorithm dropdown is refreshed by the controller.` : "The controller refreshes this miner's supported algorithm dropdown.";
 }
 
 function openMinerPackageDialog(minerID, algorithm = "") {
@@ -911,9 +1046,9 @@ function openMinerPackageDialog(minerID, algorithm = "") {
   form.elements.version.value = miner.version === "package-required" ? "" : miner.version || "";
   form.elements.algorithm.value = algorithm || miner.algorithm || "";
   $("#miner-package-title").textContent = `Upload ${miner.name}`;
-  $("#miner-package-source").innerHTML = miner.source_url
+  $("#miner-package-source").innerHTML = `Select the executable file from the official Linux package. ${miner.source_url
     ? `Official source: <a href="${escape(miner.source_url)}" target="_blank" rel="noreferrer">${escape(miner.source_url)}</a>`
-    : "Use only a package you obtained from the miner's official project.";
+    : "Use only a package you obtained from the miner's official project."}`;
   $("#miner-package-error").textContent = "";
   $("#miner-package-dialog").showModal();
 }
@@ -943,6 +1078,12 @@ async function saveQuickSheet(event) {
   const originalLabel = submit.textContent;
   const formData = new FormData(form);
   const [choiceType, choiceID] = String(formData.get("miner_choice")).split(":");
+  const primaryAlgorithmError = quickAlgorithmValidationError(form);
+  const secondaryAlgorithmError = $("#secondary-workload").classList.contains("hidden") ? "" : quickAlgorithmValidationError(form, true);
+  if (primaryAlgorithmError || secondaryAlgorithmError) {
+    $("#quick-sheet-error").textContent = primaryAlgorithmError || secondaryAlgorithmError;
+    return;
+  }
   const payload = {
     name: formData.get("name"),
     device_type: formData.get("device_type"),
@@ -1007,13 +1148,13 @@ function minerCatalogMarkup(status) {
       <small>${escape((miner.hardware || []).join(" · "))}</small>
       <p class="license-note">${escape(miner.redistribution)}</p>
       <div class="catalog-status">
-        ${miner.package_ready ? `<span class="${miner.update_available ? "pending" : "ready"}">${miner.image_included ? "Included in Rig OS" : "Installed"} · ${escape(miner.installed_version)}</span>` : `<span class="pending">${miner.image_included ? "Included in Rig OS" : miner.automatic_install ? "Automatic official download" : "Advanced manual package"}</span>`}
+        ${miner.package_ready ? `<span class="${miner.update_available ? "pending" : "ready"}">${miner.image_included ? "Included in Rig OS" : "Installed"} · ${escape(miner.installed_version)}</span>` : `<span class="pending">${miner.image_included ? "Included in Rig OS" : miner.automatic_install ? "Automatic official download" : "Manual package required"}</span>`}
         ${miner.latest_version ? `<span class="${miner.update_available ? "update-available" : "latest-release"}">Official latest · ${escape(miner.latest_version)}</span>` : ""}
         ${miner.release_check_error ? `<small>Release check unavailable</small>` : ""}
       </div>
       <div class="row-actions">
         <a class="button-link secondary" href="${escape(miner.latest_release_url || miner.source_url)}" target="_blank" rel="noreferrer">Official release</a>
-        ${miner.automatic_install ? `<button class="install-catalog-miner" data-catalog-id="${escape(miner.id)}" data-miner-name="${escape(miner.name)}" data-installed-version="${escape(miner.installed_version || "")}" data-latest-version="${escape(miner.latest_version || "")}"${miner.package_ready && !miner.update_available ? " disabled" : ""}>${miner.update_available ? "Update" : miner.package_ready ? "Up to date" : "Install"}</button>` : miner.installed_miner_id ? `<button class="secondary open-miner" data-miner-id="${escape(miner.installed_miner_id)}">Manage package</button>` : `<button class="install-catalog-miner" data-catalog-id="${escape(miner.id)}">Add advanced definition</button>`}
+        ${miner.automatic_install ? `<button class="install-catalog-miner" data-catalog-id="${escape(miner.id)}" data-miner-name="${escape(miner.name)}" data-installed-version="${escape(miner.installed_version || "")}" data-latest-version="${escape(miner.latest_version || "")}"${miner.package_ready && !miner.update_available ? " disabled" : ""}>${miner.update_available ? "Update" : miner.package_ready ? "Up to date" : "Install"}</button>` : miner.installed_miner_id ? `<button class="secondary open-miner" data-miner-id="${escape(miner.installed_miner_id)}">${miner.package_ready ? "Manage package" : "Upload package"}</button>` : `<button class="install-catalog-miner" data-catalog-id="${escape(miner.id)}" data-manual-package="true">Create definition & upload package</button>`}
       </div>
     </article>`).join("");
   const customMiner = `
@@ -1104,27 +1245,7 @@ function renderFeaturePage() {
     });
     return;
   }
-  if (state.view === "power-prices") {
-    $("#page-title").textContent = "Power & Prices";
-    $("#page-subtitle").textContent = "Compare mining returns using your electricity cost";
-    root.innerHTML = `
-      <div class="feature-hero"><span class="eyebrow">PROFITABILITY WORKSPACE</span><h2>Find the best use of your power</h2><p>This workspace will combine live coin prices, network conditions, measured rig performance, and your electricity rate to estimate net mining returns.</p></div>
-      <div class="feature-roadmap">
-        <article><h3>Enter power cost</h3><p>Set electricity pricing by farm, including cost per kWh.</p></article>
-        <article><h3>Compare net profit</h3><p>Rank supported proof-of-work coins using power cost instead of revenue alone.</p></article>
-        <article><h3>Send a flight sheet</h3><p>Choose a profitable result and create or assign its flight sheet to selected rigs.</p></article>
-      </div>`;
-    return;
-  }
-  $("#page-title").textContent = "New Coin";
-  $("#page-subtitle").textContent = "Discover newly launched proof-of-work networks";
-  root.innerHTML = `
-    <div class="feature-hero"><span class="eyebrow">EARLY DISCOVERY</span><h2>Find new proof-of-work coins sooner</h2><p>This workspace will surface newly launched mineable networks with transparent source, algorithm, pool, wallet, exchange, and risk information.</p></div>
-    <div class="feature-roadmap">
-      <article><h3>Discover launches</h3><p>Track new proof-of-work projects and their launch timelines.</p></article>
-      <article><h3>Review mining readiness</h3><p>Check algorithm, miner support, pools, wallets, network activity, and known risks.</p></article>
-      <article><h3>Quick-add flight sheet</h3><p>Create a reviewed flight sheet and send it to selected test rigs without repetitive setup.</p></article>
-    </div>`;
+  renderDiscoverPage(root);
 }
 
 async function prepareRigOS() {
@@ -1460,17 +1581,24 @@ async function saveCustomMinerBuilder(event) {
 async function installCatalogMiner(button) {
   const catalogID = button.dataset.catalogId;
   const name = button.dataset.minerName || catalogID;
-  const installed = button.dataset.installedVersion;
+  const installedVersion = button.dataset.installedVersion;
+  const installed = installedVersion === "package-required" ? "" : installedVersion;
   const latest = button.dataset.latestVersion;
+  const manualPackage = button.dataset.manualPackage === "true";
   if (installed && !confirm(`Update ${name} from ${installed} to ${latest || "the latest official release"}? Assigned rigs will download the verified binary and restart onto it.`)) return;
   button.disabled = true;
   const original = button.textContent;
-  button.textContent = installed ? "Updating…" : "Installing…";
+  button.textContent = manualPackage ? "Creating definition…" : installed ? "Updating…" : "Installing…";
   try {
-    await api(`/api/v1/rig-os/miners/${encodeURIComponent(catalogID)}`, {method: "POST"});
+    const saved = await api(`/api/v1/rig-os/miners/${encodeURIComponent(catalogID)}`, {method: "POST"});
     [state.data.miners, state.data["rig-os"]] = await Promise.all([api("/api/v1/miners"), api("/api/v1/rig-os")]);
-    renderRigOS();
-    showNotice(`${name} ${latest || "latest"} is verified and queued for assigned rigs.`);
+    render();
+    if (manualPackage) {
+      showNotice(`${name} definition created. Upload the official Linux executable to finish installation.`);
+      openMinerPackageDialog(saved.id);
+    } else {
+      showNotice(`${name} ${latest || "latest"} is verified and queued for assigned rigs.`);
+    }
   } catch (error) {
     button.disabled = false;
     button.textContent = original;
@@ -1566,18 +1694,9 @@ function renderWorkers() {
 
 function renderOverviewStats(rigs, sheets) {
   const gpus = rigs.flatMap(rig => rig.metrics?.gpus || []);
-  const hashrates = new Map();
+  const hashrates = configuredHashrates(rigs, sheets, normalizeHashrate);
   const coins = new Set();
-  rigs.forEach(rig => {
-    const sheet = sheets[rig.desired?.flight_sheet_id];
-    if (sheet?.coin) coins.add(sheet.coin);
-    if (sheet?.secondary_coin) coins.add(sheet.secondary_coin);
-    const miner = rig.metrics?.miner;
-    if (!miner?.running || !miner.hashrate) return;
-    const normalized = normalizeHashrate(miner.hashrate, miner.hashrate_unit);
-    const key = `${sheet?.coin || "Mining"}|${sheet?.algorithm || miner.profile || "Hashrate"}|${normalized.unit}`;
-    hashrates.set(key, (hashrates.get(key) || 0) + normalized.value);
-  });
+  hashrates.forEach(workload => coins.add(workload.coin));
   const totalPower = rigs.reduce((total, rig) => total + estimatedRigPower(rig), 0);
   const totalDailyCost = rigs.reduce((total, rig) => total + dailyPowerCost(estimatedRigPower(rig), farmForRig(rig)?.electricity_rate_usd_per_kwh), 0);
   const baseCards = [
@@ -1587,9 +1706,8 @@ function renderOverviewStats(rigs, sheets) {
     ["Consumption", `${totalPower.toFixed(0)} W`, `calibrated wall estimate · $${totalDailyCost.toFixed(2)} / 24h`],
     ["Coins", String(coins.size), [...coins].join(" + ") || "None assigned"]
   ];
-  const hashCards = [...hashrates].map(([key, total]) => {
-    const [coin, algorithm, unit] = key.split("|");
-    return [coin, formatHashrate(total, unit), algorithm, coin];
+  const hashCards = [...hashrates.values()].map(workload => {
+    return [workload.coin, formatHashrate(workload.total, workload.unit), workload.algorithm, workload.coin];
   });
   $("#overview-stats").innerHTML = [...baseCards, ...hashCards].map(([label, amount, note, coin]) =>
     `<article>${coin ? coinBadge(coin, "small") : ""}<span>${escape(label)}</span><strong>${escape(amount)}</strong><small>${escape(note)}</small></article>`
@@ -1636,6 +1754,10 @@ function renderRig(rig, sheets) {
     }
   });
   const isGPURig = (m.gpus || []).length > 0;
+  const cpuMiningAssigned = [sheet?.device_type, sheet?.secondary_device_type]
+    .some(deviceType => String(deviceType || "").toUpperCase() === "CPU");
+  const cpuMiningReported = (m.miner?.devices || []).some(device => device.kind === "CPU thread");
+  const showCPUMining = !isGPURig || cpuMiningAssigned || cpuMiningReported;
   const hardwarePending = !m.collected_at;
   card.dataset.rigKind = hardwarePending ? "pending" : isGPURig ? "gpu" : "cpu";
   const kind = fragment.querySelector(".rig-kind");
@@ -1643,26 +1765,74 @@ function renderRig(rig, sheets) {
   kind.classList.toggle("cpu", !isGPURig && !hardwarePending);
   kind.classList.toggle("pending", hardwarePending);
   const farm = (state.data.farms || []).find(item => item.id === rig.farm_id);
-  fragment.querySelector(".rig-meta").textContent = `${m.system?.hostname || "unknown host"} · ${rig.ip_address || "IP pending"} · ${farm?.name || "No farm"} · ${rig.tags?.join(", ") || "No tags"} · rev ${m.applied_revision || 0}/${rig.desired?.revision || 0}`;
+  fragment.querySelector(".rig-meta").textContent = `${m.system?.hostname || "unknown host"} · ${farm?.name || "No farm"} · ${rig.tags?.join(", ") || "No tags"} · rev ${m.applied_revision || 0}/${rig.desired?.revision || 0}`;
+  fragment.querySelector(".rig-ip").innerHTML = rig.ip_address
+    ? `<span class="rig-ip-label">Rig IP</span><button type="button" class="rig-remote-console-link" ${rig.online ? "" : "disabled"} aria-label="Open command console for ${escape(rig.ip_address)}" title="${rig.online ? "Open remote commands" : "Rig offline"}">${escape(rig.ip_address)}</button><span class="rig-ip-hint">· click for commands</span>`
+    : `<span class="rig-ip-label">Rig IP</span><span>Pending</span>`;
+  fragment.querySelector(".rig-remote-console-link")?.addEventListener("click", event => {
+    event.stopPropagation();
+    openWorkerConsole(rig, isGPURig);
+  });
+  const desiredFlightSheet = sheet || (rig.desired?.flight_sheet_id ? sheets[rig.desired.flight_sheet_id] : null);
+  const desiredCoin = desiredFlightSheet?.coin || rig.desired?.coin || "Unknown";
+  const desiredAlgorithm = desiredFlightSheet?.algorithm || "";
+  const activeCoin = String(m.mining_coin || desiredCoin || "Unknown");
+  const activeAlgorithm = String(m.mining_algorithm || desiredAlgorithm || "");
+  const desiredRevision = Number(rig.desired?.revision || 0);
+  const appliedRevision = Number(m.applied_revision || 0);
+  const configMismatch = desiredCoin && activeCoin && desiredCoin.toUpperCase() !== activeCoin.toUpperCase();
+  const revisionMismatch = desiredRevision > 0 && appliedRevision < desiredRevision;
+  const troubleshootingMessages = [];
+  if (m.configuration_error) troubleshootingMessages.push(`Settings not applied: ${m.configuration_error}`);
+  if (m.miner?.last_error) troubleshootingMessages.push(`Miner error: ${m.miner.last_error}`);
+  if (revisionMismatch && desiredRevision) troubleshootingMessages.push(`Waiting to apply flight sheet revision ${desiredRevision} (agent reported ${appliedRevision}).`);
+  if (configMismatch) troubleshootingMessages.push(`Desired workload: ${desiredCoin}${desiredAlgorithm ? ` / ${desiredAlgorithm}` : ""}; active workload: ${activeCoin}${activeAlgorithm ? ` / ${activeAlgorithm}` : ""}.`);
+  const troubleshooting = fragment.querySelector(".rig-troubleshooting");
+  if (troubleshootingMessages.length) {
+    troubleshooting.classList.remove("hidden");
+    troubleshooting.innerHTML = troubleshootingMessages.map(message => `<span>${escape(message)}</span>`).join("");
+  } else {
+    troubleshooting.classList.add("hidden");
+    troubleshooting.textContent = "";
+  }
+  if (m.configuration_error) {
+    fragment.querySelector(".message").textContent = `Settings not applied: ${m.configuration_error}`;
+  } else if (configMismatch || revisionMismatch) {
+    fragment.querySelector(".message").textContent = `Flight sheet pending: ${desiredCoin}${desiredAlgorithm ? ` / ${desiredAlgorithm}` : ""} is assigned, but the rig is still reporting ${activeCoin}${activeAlgorithm ? ` / ${activeAlgorithm}` : ""}.`;
+  } else {
+    fragment.querySelector(".message").textContent = "";
+  }
   const gpuHealthStrip = fragment.querySelector(".gpu-health-strip");
+  gpuHealthStrip.classList.toggle("hidden", !isGPURig);
   (m.gpus || []).forEach(gpu => {
     const temperature = Number(gpu.temperature_c || 0);
     const indicator = document.createElement("span");
-    const temperatureState = rig.online ? thermalClass(temperature) : "temperature-hot";
+    const gpuActive = Boolean(rig.online && m.miner?.running);
+    const temperatureState = gpuActive ? thermalClass(temperature) : "temperature-unknown";
     indicator.className = `gpu-health-indicator ${temperatureState}`;
-    indicator.title = rig.online
+    indicator.title = gpuActive
       ? `GPU ${gpu.index}: ${temperature ? value(temperature, "°C") : "temperature unavailable"}`
-      : `GPU ${gpu.index}: rig offline`;
+      : `GPU ${gpu.index}: ${rig.online ? "miner inactive" : "rig offline"}`;
     indicator.innerHTML = `${fanIcon()}<span>GPU ${gpu.index}</span>`;
     gpuHealthStrip.append(indicator);
   });
   gpuHealthStrip.classList.toggle("hidden", !(m.gpus || []).length);
   const workloadSummary = fragment.querySelector(".rig-workload-summary");
   if (sheet?.coin) {
+    const activeCoin = m.mining_coin || sheet.coin;
+    const activeAlgorithm = m.mining_algorithm || sheet.algorithm;
     const hashrate = m.miner?.hashrate
       ? formatHashrate(m.miner.hashrate, m.miner.hashrate_unit)
       : "—";
-    workloadSummary.innerHTML = `${coinBadge(sheet.coin, "small")}<span><strong>${escape(sheet.coin)}</strong><small>${escape(hashrate)}</small></span>`;
+    const failoverLabel = m.mining_state === "fallback"
+      ? `Fallback from ${m.primary_mining_coin || sheet.coin}`
+      : m.mining_state === "waiting"
+        ? `Waiting for ${m.primary_mining_algorithm || sheet.algorithm}`
+        : m.mining_state === "returning"
+          ? "Returning to primary"
+          : activeAlgorithm;
+    workloadSummary.innerHTML = `${coinBadge(activeCoin, "small")}<span><strong>${escape(activeCoin)}</strong><small>${escape(hashrate)} · ${escape(failoverLabel || "")}</small></span>`;
+    workloadSummary.title = m.mining_reason || "";
     workloadSummary.classList.remove("hidden");
   }
   const status = fragment.querySelector(".status");
@@ -1722,6 +1892,7 @@ function renderRig(rig, sheets) {
     coinPriceCard.classList.add("hidden");
   }
   const gpuRoot = fragment.querySelector(".gpu-list");
+  gpuRoot.classList.toggle("hidden", !isGPURig);
   (m.gpus || []).forEach(gpu => {
     const row = document.createElement("div");
     const temperature = Number(gpu.temperature_c || 0);
@@ -1736,6 +1907,7 @@ function renderRig(rig, sheets) {
         <span><small>Hash</small><strong>${deviceHashrate ? escape(formatHashrate(deviceHashrate.hashrate, deviceHashrate.unit)) : "—"}</strong></span>
         <span><small>Load</small><strong>${value(gpu.utilization_percent, "%")}</strong></span>
         <span><small>Power</small><strong>${value(gpu.power_w, " W")}</strong><em>${formatDailyPowerCost(gpu.power_w, electricityRate)}</em></span>
+        <span><small>Power limit</small><strong>${value(gpu.power_limit_w, " W")}</strong></span>
         <span><small>Fan</small><strong>${value(gpu.fan_percent, "%")}</strong></span>
       </div>
       <small class="gpu-clocks">${value(gpu.core_clock_mhz, " core")} · ${value(gpu.memory_clock_mhz, " mem")}</small>
@@ -1750,7 +1922,9 @@ function renderRig(rig, sheets) {
       openGPUTuning(rig, gpu.index);
     });
   });
-  const cpuThreads = (m.miner?.devices || []).filter(device => device.kind === "CPU thread");
+  const cpuThreads = showCPUMining
+    ? (m.miner?.devices || []).filter(device => device.kind === "CPU thread")
+    : [];
   const threadGrid = document.createElement("div");
   threadGrid.className = "cpu-thread-grid";
   cpuThreads.forEach(device => {
@@ -1774,6 +1948,27 @@ function renderRig(rig, sheets) {
     ["Network", `${m.system?.hostname || "Unknown host"} · ${rig.ip_address || "IP pending"}`],
     ["Power model", `${powerModel} · ${formatDailyPowerCost(totalPower, electricityRate)} @ $${electricityRate.toFixed(3)}/kWh`]
   ].map(([label, content]) => `<div><span>${escape(label)}</span><strong>${escape(content)}</strong></div>`).join("");
+  const cpuDiagnostics = fragment.querySelector(".cpu-diagnostics");
+  const cpu = m.cpu_optimization;
+  if (cpu && !isGPURig) {
+    cpuDiagnostics.classList.remove("hidden");
+    const governors = [...new Set(Object.values(cpu.governors || {}))].join(", ") || "Unavailable";
+    const hugePages = `${Number(cpu.huge_pages_free || 0).toLocaleString()} free / ${Number(cpu.huge_pages_total || 0).toLocaleString()} total · ${bytes(cpu.huge_page_size_bytes || 0)} pages`;
+    const cpuWarnings = [...new Set((cpu.miner_warnings || [])
+      .filter(warning => !/\bmsr\b/i.test(String(warning)))
+      .map(warning => String(warning).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim())
+      .filter(Boolean))].slice(0, 3);
+    cpuDiagnostics.innerHTML = `<div class="cpu-diagnostics-heading"><strong>CPU optimization diagnostics</strong><span>${escape(cpu.phase || "diagnostics")}</span></div>
+      <p>${escape(cpu.message || "Linux CPU mining diagnostics are active.")}</p>
+      <div class="cpu-diagnostics-grid">
+        <div><small>Huge pages</small><strong>${escape(hugePages)}</strong><em>${cpu.huge_pages_candidate ? "The RandomX setup service targets 2,048 2 MiB pages; the miner safely falls back if fewer than 1,280 are free." : "Enough free 2 MiB pages are available for RandomX large pages."}</em></div>
+        <div><small>MSR</small><strong>${cpu.msr_module_loaded ? "Module loaded" : "Module unavailable"} · ${cpu.msr_accessible ? "accessible" : "not accessible"}</strong><em>${cpu.msr_accessible ? "MSR access is available." : cpu.msr_warning ? "The miner could not access MSR." : "No miner MSR warning detected."}</em></div>
+        <div><small>CPU policy</small><strong>${escape(governors)}</strong><em>${Number(cpu.numa_nodes || 0)} NUMA node(s)</em></div>
+        <div><small>Threads</small><strong>${Number(cpu.miner_threads || 0)} mining / ${Number(cpu.cpu_threads || 0)} logical</strong><em>${cpu.improvement_percent ? `${Number(cpu.improvement_percent).toFixed(2)}% measured trial change` : "Waiting for a stable workload window."}</em></div>
+      </div>
+      ${cpuWarnings.length ? `<p class="cpu-diagnostics-error">${escape(cpuWarnings.join(" · "))}</p>` : ""}
+      ${cpu.last_error ? `<p class="cpu-diagnostics-error">${escape(cpu.last_error)}</p>` : ""}`;
+  }
   const miner = fragment.querySelector(".miner-row");
   const minerDefinition = (state.data.miners || []).find(item => item.id === sheet?.miner_id);
   const pool = (state.data.pools || []).find(item => item.id === sheet?.pool_id);
@@ -1783,6 +1978,12 @@ function renderRig(rig, sheets) {
        <div class="miner-detail miner-hash"><small>Hashrate</small><strong>${m.miner.hashrate ? escape(formatHashrate(m.miner.hashrate, m.miner.hashrate_unit)) : "Starting…"}</strong></div>
        <div class="miner-detail"><small>Shares</small><strong>${Number(m.miner.accepted_shares || 0).toLocaleString()} / ${Number(m.miner.rejected_shares || 0).toLocaleString()}</strong></div>`
     : `<div class="miner-identity stopped"><span><small>Mining</small><strong>Miner stopped</strong></span></div>`;
+  if (!m.miner?.running && sheet) {
+    const hint = document.createElement("p");
+    hint.className = "miner-troubleshooting-hint";
+    hint.textContent = `Assigned flight sheet: ${sheet.name || "unnamed"} · software: ${minerDefinition?.name || sheet.miner_id || "not assigned"}. Start miner uses this assignment.`;
+    miner.append(hint);
+  }
   const accepted = Number(m.miner?.accepted_shares || 0);
   const rejected = Number(m.miner?.rejected_shares || 0);
   const totalShares = accepted + rejected;
@@ -1816,10 +2017,11 @@ function renderRig(rig, sheets) {
     <p>Universal miner telemetry. Pool luck, block history, and network status require a compatible pool API.</p>`;
   fragment.querySelector(".pool-performance").innerHTML = `<div class="pool-performance-loading">Open this rig to load pool performance.</div>`;
   const minerScreenButton = fragment.querySelector(".miner-screen");
-  minerScreenButton.disabled = !m.miner?.running;
-  minerScreenButton.title = m.miner?.running
-    ? `Show the actual MinerDash-managed ${m.miner.profile || "miner"} output`
-    : "The miner is not running";
+  minerScreenButton.disabled = !rig.online;
+  minerScreenButton.textContent = m.miner?.running ? "Miner screen" : "Miner diagnostics";
+  minerScreenButton.title = rig.online
+    ? `Show the actual MinerDash-managed ${m.miner.profile || "miner"} output and startup errors`
+    : "The rig must be online to retrieve miner diagnostics";
   fragment.querySelector(".close-rig-focus").addEventListener("click", event => {
     event.preventDefault();
     setFocusedRig(card, false);
@@ -1864,6 +2066,15 @@ function renderRig(rig, sheets) {
   const driverInventory = fragment.querySelector(".driver-inventory");
   const gpuVendors = [...new Set((m.gpus || []).map(gpu => String(gpu.vendor || "").toUpperCase()).filter(vendor => vendor === "NVIDIA" || vendor === "AMD"))];
   driverPanel.classList.toggle("hidden", gpuVendors.length === 0);
+  fragment.querySelectorAll(".gpu-only-setting").forEach(element => {
+    element.classList.toggle("hidden", !isGPURig);
+  });
+  fragment.querySelectorAll(".cpu-only-setting").forEach(element => {
+    element.classList.toggle("hidden", isGPURig);
+  });
+  fragment.querySelectorAll(".gpu-only-preset").forEach(element => {
+    element.classList.toggle("hidden", !isGPURig);
+  });
   driverInventory.innerHTML = gpuVendors.map(vendor => {
     const cards = m.gpus.filter(gpu => String(gpu.vendor || "").toUpperCase() === vendor);
     const versions = [...new Set(cards.map(gpu => gpu.driver).filter(Boolean))];
@@ -1908,32 +2119,78 @@ function renderRig(rig, sheets) {
   const smartTuneButton = fragment.querySelector(".smart-tune");
   const stopSmartTuneButton = fragment.querySelector(".stop-smart-tune");
   const smartTuneStatus = fragment.querySelector(".smart-tune-status");
-  const tune = m.smart_tune;
-  smartTuneButton.classList.toggle("hidden", !isGPURig || Boolean(tune?.active));
-  smartTuneButton.disabled = !m.miner?.running || !rig.desired?.overclock_profile_id || !m.smart_tune_supported;
+  const tuneCommand = rig.smart_tune_command;
+  const commandActive = tuneCommand?.status === "pending" || tuneCommand?.status === "running";
+  const telemetryMatchesCommand = m.smart_tune && (!tuneCommand || !m.smart_tune.command_id || m.smart_tune.command_id === tuneCommand.id);
+  let tune = telemetryMatchesCommand ? {...m.smart_tune} : null;
+  if (tuneCommand && (tuneCommand.status === "complete" || tuneCommand.status === "failed")) {
+    tune = {
+      active: false,
+      command_id: tuneCommand.id,
+      phase: tuneCommand.status,
+      message: tuneCommand.error || tuneCommand.output || (tuneCommand.status === "complete" ? "Smart Tune completed." : "Smart Tune failed.")
+    };
+  } else if (tuneCommand && !tune) {
+    tune = {
+      active: commandActive,
+      command_id: tuneCommand.id,
+      phase: tuneCommand.status,
+      message: tuneCommand.status === "pending"
+        ? "Queued and waiting for the rig agent to begin."
+        : "The rig agent accepted Smart Tune; waiting for its first progress update."
+    };
+  }
+  const tuneActive = Boolean(tune?.active || commandActive);
+  const assignedTuning = (state.data["overclock-profiles"] || []).find(item => item.id === rig.desired?.overclock_profile_id);
+  const configuredPowerLimits = (assignedTuning?.settings || []).map(setting => Number(setting.power_limit_w || 0)).filter(limit => limit > 0);
+  const smartTunePowerLimit = configuredPowerLimits.length ? Math.min(...configuredPowerLimits) : 0;
+  const smartTuneTelemetryGap = (m.gpus || []).find(gpu => {
+    const device = (m.miner?.devices || []).find(item => item.index === gpu.index && String(item.kind || "").toUpperCase() === "GPU");
+    return Number(gpu.power_w || 0) <= 0 || Number(device?.hashrate || 0) <= 0;
+  });
+  smartTuneButton.classList.toggle("hidden", !isGPURig || tuneActive);
+  smartTuneButton.disabled = !m.miner?.running || !rig.desired?.overclock_profile_id || !m.smart_tune_supported || Boolean(smartTuneTelemetryGap);
   smartTuneButton.title = smartTuneButton.disabled
-    ? (m.smart_tune_supported
-      ? "A running GPU miner and assigned GPU tuning profile are required"
-      : "Upgrade this rig to the latest MinerDash agent first")
-    : "Safely benchmark each GPU without exceeding 115 W";
-  stopSmartTuneButton.classList.toggle("hidden", !tune?.active);
-  if (tune) {
-    const progress = tune.total_gpus ? `${tune.completed_gpus}/${tune.total_gpus}` : "";
+    ? (!m.smart_tune_supported
+      ? "Upgrade this rig to the latest MinerDash agent first"
+      : smartTuneTelemetryGap && m.miner?.running
+        ? `GPU ${smartTuneTelemetryGap.index} is not reporting power draw and per-GPU hashrate yet; Smart Tune needs both to measure safely`
+        : "A running GPU miner and assigned GPU tuning profile are required")
+    : smartTunePowerLimit
+      ? `Safely benchmark each GPU without exceeding the configured ${smartTunePowerLimit} W limit`
+      : "Safely benchmark each GPU within its driver-reported hardware power range";
+  stopSmartTuneButton.classList.toggle("hidden", !isGPURig || !m.smart_tune?.active);
+  if (isGPURig && tune) {
     smartTuneStatus.classList.remove("hidden");
-    smartTuneStatus.classList.toggle("complete", tune.phase === "complete");
-    smartTuneStatus.classList.toggle("failed", tune.phase === "failed");
-    smartTuneStatus.innerHTML = `<strong>${tune.active ? "Smart Tune running" : tune.phase === "complete" ? "Smart Tune complete" : "Smart Tune stopped"} ${escape(progress)}</strong><span>${escape(tune.message || "")}</span>`;
+    smartTuneStatus.classList.remove("pending", "running", "starting", "benchmarking", "testing", "complete", "failed");
+    smartTuneStatus.classList.add(tune.phase || (tuneActive ? "running" : "complete"));
+    const completedGPUs = Number(tune.completed_gpus || 0);
+    const totalGPUs = Number(tune.total_gpus || 0);
+    const progressPercent = totalGPUs ? Math.min(100, Math.max(0, completedGPUs / totalGPUs * 100)) : (tune.phase === "complete" ? 100 : 0);
+    const progress = totalGPUs ? `${completedGPUs}/${totalGPUs} GPUs` : tune.phase === "pending" ? "Queued" : "";
+    const startedAt = tune.started_at || tuneCommand?.created_at;
+    const elapsedMinutes = startedAt ? Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 60000)) : 0;
+    const elapsed = startedAt ? (elapsedMinutes < 1 ? "Less than 1 minute elapsed" : `${elapsedMinutes} minute${elapsedMinutes === 1 ? "" : "s"} elapsed`) : "";
+    const title = tuneActive ? "Smart Tune running" : tune.phase === "complete" ? "Smart Tune complete" : "Smart Tune failed";
+    smartTuneStatus.innerHTML = `<strong>${escape(title)}${progress ? ` · ${escape(progress)}` : ""}</strong>
+      <div class="smart-tune-progress"><i style="width:${progressPercent}%"></i></div>
+      <span>${escape(tune.message || "")}</span>
+      <small>${elapsed ? `<span>${escape(elapsed)}</span>` : ""}${tuneActive ? "<span>Mining should remain active while each GPU is measured.</span>" : ""}</small>`;
+  } else {
+    smartTuneStatus.classList.add("hidden");
   }
   smartTuneButton.addEventListener("click", async event => {
     event.preventDefault();
     const root = event.target.closest(".rig-card");
     try {
-      await api(`/api/v1/rigs/${rig.id}/commands`, {
+      const command = await api(`/api/v1/rigs/${rig.id}/commands`, {
         method: "POST",
-        body: JSON.stringify({action: "smart-tune", smart_tune: {mode: "balanced", max_power_w: 115, max_temperature_c: 78}})
+        body: JSON.stringify({action: "smart-tune", smart_tune: {mode: "balanced", max_power_w: smartTunePowerLimit, max_temperature_c: 78}})
       });
-      root.querySelector(".message").textContent = "Smart Tune queued. Each GPU will be tested independently for about 5-10 minutes total.";
-      await loadAll({preserveWorkerUI: true});
+      rig.smart_tune_command = command;
+      await refreshLiveRigs();
+      const liveMessage = document.querySelector(`.rig-card[data-rig-id="${CSS.escape(rig.id)}"] .message`) || root.querySelector(".message");
+      if (liveMessage) liveMessage.textContent = "Smart Tune queued. Progress will appear below and update automatically.";
     } catch (error) { root.querySelector(".message").textContent = error.message; }
   });
   stopSmartTuneButton.addEventListener("click", async event => {
@@ -1943,6 +2200,14 @@ function renderRig(rig, sheets) {
       await api(`/api/v1/rigs/${rig.id}/commands`, {method: "POST", body: JSON.stringify({action: "stop-smart-tune"})});
       root.querySelector(".message").textContent = "Smart Tune stop requested. Original limits will be restored.";
     } catch (error) { root.querySelector(".message").textContent = error.message; }
+  });
+  const flightSheet = sheet || (rig.desired?.flight_sheet_id ? sheets[rig.desired.flight_sheet_id] : null);
+  const flightSheetButton = fragment.querySelector(".edit-flight-sheet-inline");
+  flightSheetButton.disabled = !flightSheet;
+  flightSheetButton.title = flightSheet ? `Edit ${flightSheet.name}` : "Assign a flight sheet before editing it";
+  flightSheetButton.addEventListener("click", event => {
+    event.preventDefault();
+    openFlightSheetEditorForRig(rig, flightSheet);
   });
   fragment.querySelector(".save-assignment").addEventListener("click", async event => {
     event.preventDefault();
@@ -1971,7 +2236,12 @@ function renderRig(rig, sheets) {
       const command = await api(`/api/v1/rigs/${rig.id}/commands`, {method: "POST", body: JSON.stringify({action: button.dataset.action})});
       message.textContent = isMinerScreen ? "Loading current miner output…" : `${button.dataset.action} command queued`;
       if (isMinerScreen) {
-        await showCommandResult(rig.id, command.id, root);
+        await showCommandResult(rig.id, command.id, root, {
+          lastError: rig.metrics?.miner?.last_error,
+          configurationError: rig.metrics?.configuration_error,
+          desiredCoin: sheet?.coin,
+          activeCoin: rig.metrics?.mining_coin
+        });
         root.querySelector(".miner-screen-panel").scrollIntoView({behavior: "smooth", block: "nearest"});
       }
     } catch (error) { message.textContent = error.message; }
@@ -2008,7 +2278,7 @@ function renderRig(rig, sheets) {
         max_points: "2000"
       });
       const history = await api(`/api/v1/rigs/${rig.id}/history?${query}`);
-      renderHistory(historyRoot, history, rig, sheet, range);
+      renderHistory(historyRoot, history, rig, sheet, sheets, range);
       historyRoot.dataset.loaded = "true";
       historyDownload.disabled = !history.length;
     } catch (error) {
@@ -2043,14 +2313,237 @@ function renderRig(rig, sheets) {
     loadHistory();
   }));
   refreshHistoryControls();
-  fragment.querySelector(".remove-worker").addEventListener("click", async event => {
+  fragment.querySelectorAll(".remove-worker").forEach(button => button.addEventListener("click", async event => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!confirm(`Remove ${rig.name} and its local history from MinerDash?`)) return;
     try {
       await api(`/api/v1/rigs/${rig.id}`, {method: "DELETE"});
       await loadAll();
     } catch (error) { event.target.closest(".rig-card").querySelector(".message").textContent = error.message; }
-  });
+  }));
   return fragment;
+}
+
+function openWorkerConsole(rig, isGPURig) {
+  const panel = $("#rig-template").content.querySelector(".shell-command-panel").cloneNode(true);
+  panel.classList.remove("hidden");
+  panel.querySelector(".gpu-only-preset").classList.toggle("hidden", !isGPURig);
+  panel.querySelector(".driver-command-section").classList.toggle("hidden", !isGPURig);
+  panel.querySelector(".rig-panel-heading h3").textContent = `Run a command on ${rig.name}`;
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "secondary";
+  closeButton.textContent = "Close";
+  panel.querySelector(".rig-panel-heading").append(closeButton);
+
+  const dialog = document.createElement("dialog");
+  dialog.className = "worker-console-dialog";
+  dialog.append(panel);
+  document.body.append(dialog);
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "open");
+  }
+  closeButton.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove(), {once: true});
+
+  const shellInput = panel.querySelector(".shell-command-input");
+  const shellConfirm = panel.querySelector(".shell-command-confirm-check");
+  const shellRun = panel.querySelector(".shell-command-run");
+  const shellOutput = panel.querySelector(".shell-command-output");
+  const shellStatus = panel.querySelector(".shell-command-status");
+  const updateShellRunState = () => {
+    shellRun.disabled = !rig.online || !shellConfirm.checked || !shellInput.value.trim();
+    shellRun.title = rig.online ? "" : "The rig must be online to run commands";
+  };
+  panel.querySelectorAll("[data-shell-command]").forEach(button => {
+    button.addEventListener("click", () => {
+      shellInput.value = button.dataset.shellCommand;
+      updateShellRunState();
+      shellInput.focus();
+    });
+  });
+  shellInput.addEventListener("input", updateShellRunState);
+  shellInput.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    shellRun.click();
+  });
+  shellConfirm.addEventListener("change", updateShellRunState);
+  shellRun.addEventListener("click", async () => {
+    const commandText = shellInput.value.trim();
+    if (!commandText || !shellConfirm.checked || !rig.online) return;
+    shellRun.disabled = true;
+    shellStatus.textContent = "Queued…";
+    shellOutput.textContent = `$ ${commandText}\nWaiting for rig response…`;
+    try {
+      const result = await runRigShellCommand(rig.id, commandText, message => {
+        shellStatus.textContent = message;
+      });
+      if (!result || !["complete", "failed"].includes(result.status)) {
+        shellStatus.textContent = "Still running or rig is offline";
+        shellOutput.textContent = `$ ${commandText}\nNo result received yet. Close this window and try again after the rig reconnects.`;
+      } else {
+        shellStatus.textContent = result.status === "complete" ? "Completed" : "Command failed";
+        shellOutput.textContent = `$ ${commandText}\n${result.output || "(no output)"}${result.error ? `\n\n${result.error}` : ""}`;
+      }
+    } catch (error) {
+      shellStatus.textContent = "Could not run command";
+      shellOutput.textContent = error.message;
+    } finally {
+      updateShellRunState();
+    }
+  });
+  updateShellRunState();
+
+  const installDiskScan = panel.querySelector(".scan-install-disks");
+  const installDiskStatus = panel.querySelector(".install-disk-status");
+  const installDiskPicker = panel.querySelector(".install-disk-picker");
+  const installDiskSelect = panel.querySelector(".install-disk-select");
+  const installDiskConfirm = panel.querySelector(".install-disk-confirm");
+  const installDiskConfirmCheck = panel.querySelector(".install-disk-confirm-check");
+  const installDiskRun = panel.querySelector(".install-disk-run");
+  const updateInstallDiskRunState = () => {
+    installDiskRun.disabled = !rig.online || !installDiskSelect.value || !installDiskConfirmCheck.checked;
+  };
+  installDiskConfirmCheck.addEventListener("change", updateInstallDiskRunState);
+  installDiskSelect.addEventListener("change", updateInstallDiskRunState);
+  installDiskScan.disabled = !rig.online;
+  installDiskScan.addEventListener("click", async () => {
+    installDiskScan.disabled = true;
+    installDiskStatus.textContent = "Scanning…";
+    try {
+      const command = "python3 -c 'import json,subprocess; s=subprocess.check_output([\"findmnt\",\"-nro\",\"SOURCE\",\"/\"]).decode().strip(); d=json.loads(subprocess.check_output([\"lsblk\",\"-J\",\"-b\",\"-o\",\"NAME,PATH,TYPE,SIZE,RM,RO,MOUNTPOINTS,MODEL,SERIAL\"])); r=subprocess.check_output([\"lsblk\",\"-s\",\"-nro\",\"PATH,TYPE\",s]).decode().splitlines(); d[\"root_disk\"]=next((line.split()[0] for line in r if line.split()[-1:]==[\"disk\"]),\"\"); print(json.dumps(d))'";
+      const result = await runRigShellCommand(rig.id, command);
+      if (!result || result.status !== "complete") {
+        throw new Error(result?.error || "The rig did not return its disk inventory.");
+      }
+      const inventory = JSON.parse(result.output);
+      const hasMountedChild = device => (device.mountpoints || []).some(Boolean) ||
+        (device.children || []).some(hasMountedChild);
+      const disks = (inventory.blockdevices || []).filter(device =>
+        device.type === "disk" &&
+        device.path !== inventory.root_disk &&
+        !device.rm &&
+        !hasMountedChild(device)
+      );
+      installDiskSelect.replaceChildren(new Option("Choose an internal drive…", ""));
+      disks.forEach(device => {
+        if (!/^\/dev\/[A-Za-z0-9._/-]+$/.test(device.path || "") || device.path.includes("..")) return;
+        const description = [device.model, device.serial].filter(Boolean).join(" · ");
+        installDiskSelect.add(new Option(
+          `${device.path} · ${bytes(Number(device.size || 0))}${description ? ` · ${description}` : ""}`,
+          device.path
+        ));
+      });
+      if (installDiskSelect.options.length === 1) {
+        installDiskStatus.textContent = "No eligible unmounted internal drives found.";
+        installDiskPicker.classList.add("hidden");
+        installDiskConfirm.classList.add("hidden");
+        installDiskRun.classList.add("hidden");
+      } else {
+        installDiskStatus.textContent = `${installDiskSelect.options.length - 1} drive(s) available`;
+        installDiskPicker.classList.remove("hidden");
+        installDiskConfirm.classList.remove("hidden");
+        installDiskRun.classList.remove("hidden");
+      }
+      updateInstallDiskRunState();
+    } catch (error) {
+      installDiskStatus.textContent = error.message;
+    } finally {
+      installDiskScan.disabled = !rig.online;
+    }
+  });
+  installDiskRun.addEventListener("click", async () => {
+    const target = installDiskSelect.value;
+    if (!/^\/dev\/[A-Za-z0-9._/-]+$/.test(target) || target.includes("..") ||
+        !installDiskConfirmCheck.checked || !rig.online) return;
+    if (!confirm(`Permanently erase ${target} and install Miner Dash Rig OS to it? Keep the rig powered until it is finished.`)) return;
+    installDiskRun.disabled = true;
+    installDiskStatus.textContent = "Starting the local-drive installation…";
+    try {
+      const command = `systemd-run --unit=minerdash-disk-install --collect --no-block /usr/local/sbin/minerdash-install-to-disk --target '${target}' --confirm 'ERASE-${target}'`;
+      const result = await runRigShellCommand(rig.id, command);
+      if (!result || result.status !== "complete") {
+        throw new Error(result?.error || "The rig did not confirm that disk installation started.");
+      }
+      installDiskStatus.textContent = "Installation started. Keep the rig powered; after cloning completes, remove the USB and boot the internal drive.";
+    } catch (error) {
+      installDiskStatus.textContent = error.message;
+      updateInstallDiskRunState();
+    }
+  });
+
+  const driverButtons = panel.querySelectorAll(".driver-list-button");
+  const driverStatus = panel.querySelector(".driver-list-status");
+  const driverPicker = panel.querySelector(".driver-version-picker");
+  const driverSelect = panel.querySelector(".driver-version-select");
+  const driverInstall = panel.querySelector(".driver-install-button");
+  const driverWarning = panel.querySelector(".driver-install-warning");
+  let selectedDriverVendor = "";
+  const updateDriverInstallState = () => {
+    driverInstall.disabled = !rig.online || !driverSelect.value;
+  };
+  driverSelect.addEventListener("change", updateDriverInstallState);
+  driverButtons.forEach(button => button.addEventListener("click", async () => {
+    if (!rig.online) return;
+    selectedDriverVendor = button.dataset.driverVendor;
+    driverButtons.forEach(item => { item.disabled = true; });
+    driverStatus.textContent = `Loading ${button.dataset.driverVendor} packages…`;
+    driverPicker.classList.add("hidden");
+    driverInstall.classList.add("hidden");
+    driverWarning.classList.add("hidden");
+    try {
+      const result = await runRigCommand(rig.id, "gpu-driver-list", {vendor: button.dataset.driverVendor, channel: "stable"}, message => {
+        driverStatus.textContent = message;
+      });
+      if (!result || result.status !== "complete") throw new Error(result?.error || "The rig did not return its driver packages.");
+      const choices = result.output.split(/\r?\n/).map(line => line.split("|").map(value => value.trim())).filter(parts => parts.length === 2 && parts[0] && parts[1]);
+      driverSelect.replaceChildren(new Option("Choose an exact package version…", ""));
+      [...new Map(choices.map(parts => [`${parts[0]}=${parts[1]}`, parts])).values()].forEach(([packageName, version]) => {
+        driverSelect.add(new Option(`${packageName} · ${version}`, `${packageName}|${version}`));
+      });
+      if (driverSelect.options.length === 1) throw new Error("No driver versions were returned by the rig.");
+      driverPicker.classList.remove("hidden");
+      driverInstall.classList.remove("hidden");
+      driverWarning.classList.remove("hidden");
+      driverStatus.textContent = `${driverSelect.options.length - 1} package version(s) available`;
+      updateDriverInstallState();
+    } catch (error) {
+      driverStatus.textContent = error.message;
+    } finally {
+      driverButtons.forEach(item => { item.disabled = false; });
+    }
+  }));
+  driverInstall.addEventListener("click", async () => {
+    if (!driverSelect.value || !rig.online) return;
+    const [packageName, version] = driverSelect.value.split("|");
+    if (!packageName || !version || !confirm(`Install ${packageName} version ${version} on ${rig.name}? Mining will stop.`)) return;
+    driverInstall.disabled = true;
+    driverStatus.textContent = "Queueing driver installation…";
+    try {
+      const result = await runRigCommand(rig.id, "gpu-driver-update", {
+        vendor: selectedDriverVendor,
+        channel: "stable",
+        package: packageName,
+        version
+      }, message => { driverStatus.textContent = message; });
+      if (!result || result.status !== "complete") throw new Error(result?.error || "Driver installation failed.");
+      driverStatus.textContent = "Driver installed. Reboot is required to load it.";
+      if (confirm("The driver package finished installing. Reboot this rig now?")) {
+        await runRigCommand(rig.id, "reboot", {}, message => { driverStatus.textContent = message; });
+      }
+    } catch (error) {
+      driverStatus.textContent = error.message;
+      updateDriverInstallState();
+    }
+  });
+
+  dialog.showModal();
+  shellInput.focus();
 }
 
 async function loadRigPoolPerformance(card, rig) {
@@ -2093,6 +2586,38 @@ async function loadRigPoolPerformance(card, rig) {
 
 function formatCoinAmount(amount) {
   return Number(amount || 0).toLocaleString(undefined, {maximumFractionDigits: 8});
+}
+
+async function runRigShellCommand(rigID, commandText, onStatus = () => {}) {
+  const command = await api(`/api/v1/rigs/${encodeURIComponent(rigID)}/commands`, {
+    method: "POST",
+    body: JSON.stringify({action: "shell-command", shell_command: commandText})
+  });
+  let result = null;
+  for (let attempt = 0; attempt < 35; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const commands = await api(`/api/v1/rigs/${encodeURIComponent(rigID)}/commands`);
+    result = commands.find(item => item.id === command.id);
+    if (result && ["complete", "failed"].includes(result.status)) return result;
+    onStatus(result?.status === "running" ? "Running…" : "Queued…");
+  }
+
+  async function runRigCommand(rigID, action, payload, onStatus = () => {}) {
+    const command = await api(`/api/v1/rigs/${encodeURIComponent(rigID)}/commands`, {
+      method: "POST",
+      body: JSON.stringify({action, driver_update: payload})
+    });
+    let result = null;
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const commands = await api(`/api/v1/rigs/${encodeURIComponent(rigID)}/commands`);
+      result = commands.find(item => item.id === command.id);
+      if (result && ["complete", "failed"].includes(result.status)) return result;
+      onStatus(result?.status === "running" ? "Running…" : "Queued…");
+    }
+    return result;
+  }
+  return result;
 }
 
 function thermalClass(temperature) {
@@ -2279,14 +2804,14 @@ async function saveGPUTuning(event) {
   await applyGPUTuningSettings(rig, tuningSettingsFromDialog(), `Per-GPU tuning queued for ${rig.name}.`);
 }
 
-function renderHistory(root, history, rig, sheet, range) {
+function renderHistory(root, history, rig, sheet, sheets, range) {
   root.classList.remove("hidden");
   if (!history.length) {
     root.innerHTML = `<div class="empty simple-empty">No telemetry was recorded during this ${escape(range.label)} period.</div>`;
     return;
   }
   if ((rig.metrics?.gpus || []).length) {
-    renderGPUHistory(root, history, rig, sheet, range);
+    renderGPUHistory(root, history, rig, sheet, sheets, range);
     return;
   }
   const temperatures = history.map(sample => Math.max(0, ...(sample.gpus || []).map(gpu => gpu.temperature_c || 0)));
@@ -2299,20 +2824,15 @@ function renderHistory(root, history, rig, sheet, range) {
     total: true,
     series: [{label: "Estimate", values: history.map(sample => sample.miner?.running ? estimate : undefined)}]
   }, history, range) : "";
-  root.innerHTML = `<div class="chart-legend"><span class="cpu-line">CPU %</span><span class="temp-line">Temperature °C</span><span>${escape(range.label)} · ${history.length.toLocaleString()} samples</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${escape(range.label)} CPU and temperature history"><polyline class="cpu-series" points="${points(cpu)}"></polyline><polyline class="temp-series" points="${points(temperatures)}"></polyline></svg>${powerChart}`;
+  const hashrateCharts = renderHashrateHistory(history, sheets, sheet, range);
+  root.innerHTML = `<div class="chart-legend"><span class="cpu-line">CPU %</span><span class="temp-line">Temperature °C</span><span>${escape(range.label)} · ${history.length.toLocaleString()} samples</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${escape(range.label)} CPU and temperature history"><polyline class="cpu-series" points="${points(cpu)}"></polyline><polyline class="temp-series" points="${points(temperatures)}"></polyline></svg><div class="gpu-history-stack">${hashrateCharts}${powerChart}</div>`;
 }
 
 const gpuChartColors = ["#40a9df", "#e78bbd", "#73d36b", "#f0a33b", "#a78bfa", "#56d6c9", "#ef6b73", "#d1c759", "#8ab4f8", "#c58af9"];
 
-function renderGPUHistory(root, history, rig, sheet, range) {
+function renderGPUHistory(root, history, rig, sheet, sheets, range) {
   const indices = [...new Set(history.flatMap(sample => (sample.gpus || []).map(gpu => gpu.index)))].sort((a, b) => a - b);
   const sampleGPU = (sample, index) => (sample.gpus || []).find(gpu => gpu.index === index);
-  const sampleHashrate = (sample, index) => (sample.miner?.devices || []).find(device =>
-    device.index === index && String(device.kind || "").toUpperCase() !== "CPU THREAD"
-  );
-  const algorithm = displayAlgorithm(sheet?.algorithm || rig.metrics?.miner?.profile || "Hashrate");
-  const hashrateUnit = history.flatMap(sample => sample.miner?.devices || []).find(device => device.unit)?.unit ||
-    rig.metrics?.miner?.hashrate_unit || "H/s";
   const charts = [
     {
       title: "Activity", unit: "%", ceiling: 100,
@@ -2331,10 +2851,6 @@ function renderGPUHistory(root, history, rig, sheet, range) {
       series: indices.map(index => ({label: `GPU ${index}`, values: history.map(sample => sampleGPU(sample, index)?.power_w)}))
     },
     {
-      title: algorithm, unit: hashrateUnit, formatValue: value => formatHashrate(value, hashrateUnit),
-      series: indices.map(index => ({label: `GPU ${index}`, values: history.map(sample => sampleHashrate(sample, index)?.hashrate)}))
-    },
-    {
       title: "Estimated Total Power", unit: "W", total: true,
       series: [{
         label: "Total",
@@ -2344,7 +2860,18 @@ function renderGPUHistory(root, history, rig, sheet, range) {
       }]
     }
   ];
-  root.innerHTML = `<div class="gpu-history-stack">${charts.map(chart => renderMetricChart(chart, history, range)).join("")}</div>`;
+  const hashrateCharts = renderHashrateHistory(history, sheets, sheet, range);
+  root.innerHTML = `<div class="gpu-history-stack">${charts.slice(0, 4).map(chart => renderMetricChart(chart, history, range)).join("")}${hashrateCharts}${renderMetricChart(charts[4], history, range)}</div>`;
+}
+
+function renderHashrateHistory(history, sheets, sheet, range) {
+  return hashrateHistoryCharts(history, sheets, sheet, normalizeHashrate).map(workload => renderMetricChart({
+    title: `${workload.coin} · ${displayAlgorithm(workload.algorithm)}`,
+    unit: workload.unit,
+    summaryValue: true,
+    formatValue: value => formatHashrate(value, workload.unit),
+    series: [{label: workload.coin, values: workload.values}]
+  }, history, range)).join("");
 }
 
 function displayAlgorithm(algorithm) {
@@ -2398,7 +2925,7 @@ function renderMetricChart(chart, history, range) {
     : {month: "short", day: "numeric", hour: "2-digit"};
   const firstTime = new Date(history[0].collected_at).toLocaleString([], timeOptions);
   const lastTime = new Date(history[history.length - 1].collected_at).toLocaleString([], timeOptions);
-  const summary = chart.total ? latest[0]?.value : `${latest.length} GPU${latest.length === 1 ? "" : "s"}`;
+  const summary = chart.total || chart.summaryValue ? latest[0]?.value : `${latest.length} GPU${latest.length === 1 ? "" : "s"}`;
   return `<section class="gpu-history-chart ${chart.total ? "total-power-chart" : ""}">
     <div class="gpu-chart-heading"><div><span>${escape(chart.title)}</span><small>${escape(range.label)} · ${history.length.toLocaleString()} samples</small></div><strong>${escape(summary || "—")}</strong></div>
     <div class="gpu-chart-legend">${legend}</div>
@@ -2454,7 +2981,7 @@ function documentCreate(tagName, properties) {
   return element;
 }
 
-async function showCommandResult(rigID, commandID, root) {
+async function showCommandResult(rigID, commandID, root, diagnostics = {}) {
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     const commands = await api(`/api/v1/rigs/${rigID}/commands`);
@@ -2462,10 +2989,23 @@ async function showCommandResult(rigID, commandID, root) {
     if (command?.status === "complete" || command?.status === "failed") {
       const liveRoot = root.isConnected ? root : document.querySelector(`.rig-card[data-rig-id="${CSS.escape(rigID)}"]`);
       if (!liveRoot) return;
+      const diagnosticLines = [
+        diagnostics.configurationError ? `Configuration error: ${diagnostics.configurationError}` : "",
+        diagnostics.lastError ? `Miner startup error: ${diagnostics.lastError}` : "",
+        diagnostics.desiredCoin && diagnostics.activeCoin &&
+          diagnostics.desiredCoin.toUpperCase() !== diagnostics.activeCoin.toUpperCase()
+          ? `Workload mismatch: assigned ${diagnostics.desiredCoin}, agent reports ${diagnostics.activeCoin}`
+          : ""
+      ].filter(Boolean);
       const output = liveRoot.querySelector(".log-output");
-      output.textContent = cleanMinerOutput(command.output || command.error || "No log output returned");
+      output.textContent = [
+        cleanMinerOutput(command.output || command.error || "No miner output returned"),
+        ...diagnosticLines
+      ].join("\n\n");
       liveRoot.querySelector(".miner-screen-panel").classList.remove("hidden");
-      liveRoot.querySelector(".miner-screen-message").textContent = command.status === "failed" ? "Unable to load miner output" : "Current MinerDash-managed miner output";
+      liveRoot.querySelector(".miner-screen-message").textContent = command.status === "failed"
+        ? "Unable to load miner diagnostics"
+        : diagnosticLines.length ? "Miner output and current startup diagnostics" : "Current MinerDash-managed miner output";
       return;
     }
   }
@@ -2695,15 +3235,7 @@ function renderFarms(content, farms) {
     const cpuThreads = activeCPUThreadCount(farmRigs);
     const power = farmRigs.reduce((total, rig) => total + estimatedRigPower(rig), 0);
     const electricityRate = Number(farm.electricity_rate_usd_per_kwh || 0);
-    const hashrates = new Map();
-    farmRigs.forEach(rig => {
-      const miner = rig.metrics?.miner;
-      if (!miner?.running || !miner.hashrate) return;
-      const sheet = sheets[rig.desired?.flight_sheet_id];
-      const normalized = normalizeHashrate(miner.hashrate, miner.hashrate_unit);
-      const key = `${sheet?.coin || "Mining"}|${sheet?.algorithm || miner.profile || "Hashrate"}|${normalized.unit}`;
-      hashrates.set(key, (hashrates.get(key) || 0) + normalized.value);
-    });
+    const hashrates = configuredHashrates(farmRigs, sheets, normalizeHashrate);
     const card = document.createElement("article");
     card.className = "farm-card expandable-row";
     card.dataset.id = farm.id || "unassigned";
@@ -2719,9 +3251,8 @@ function renderFarms(content, farms) {
           <div><span>CPU mining threads</span><strong>${cpuThreads}</strong></div>
           <div><span>Est. wall power</span><strong>${power.toFixed(0)} W</strong><small>${formatDailyPowerCost(power, electricityRate)} @ $${electricityRate.toFixed(3)}/kWh</small></div>
         </div>
-        <div class="farm-hashrates">${hashrates.size ? [...hashrates].map(([key, total]) => {
-          const [coin, algorithm, unit] = key.split("|");
-          return `<span>${coinBadge(coin, "small")}<strong>${escape(coin)}</strong> ${escape(formatHashrate(total, unit))}<small>${escape(algorithm)}</small></span>`;
+        <div class="farm-hashrates">${hashrates.size ? [...hashrates.values()].map(workload => {
+          return `<span>${coinBadge(workload.coin, "small")}<strong>${escape(workload.coin)}</strong> ${escape(formatHashrate(workload.total, workload.unit))}<small>${escape(workload.algorithm)}</small></span>`;
         }).join("") : `<span class="farm-no-hashrate">No active hashrate reported</span>`}</div>
         <div class="farm-rig-heading"><h3>Rigs</h3><span>${farmRigs.length} assigned</span></div>
         <div class="rig-grid"></div>
@@ -2773,8 +3304,33 @@ function formatCell(key, value, lookup) {
   return escape(value || "—");
 }
 
-function openResourceDialog(record = {}) {
-  const definition = definitions[state.view];
+function openFlightSheetEditorForRig(rig, sheet) {
+  if (!sheet) {
+    showNotice("Assign a flight sheet before editing it.");
+    return;
+  }
+  openResourceDialog({...sheet}, "flight-sheets");
+  const resourceForm = document.querySelector("#resource-form");
+  resourceForm.dataset.rigId = rig.id;
+  resourceForm.dataset.sheetId = sheet.id;
+  const actions = resourceForm.querySelector(".dialog-actions");
+  actions.querySelectorAll(".flight-sheet-save-modes").forEach(element => element.remove());
+  actions.querySelector("#save-dialog-resource").classList.add("hidden");
+  const saveModes = document.createElement("div");
+  saveModes.className = "flight-sheet-save-modes";
+  saveModes.innerHTML = `
+    <button type="submit" class="secondary" data-flight-save-mode="update">Update current sheet</button>
+    <button type="submit" class="secondary" data-flight-save-mode="new">Save as new</button>`;
+  const cancelButton = actions.querySelector("#cancel-dialog");
+  cancelButton?.before(saveModes);
+}
+
+function openResourceDialog(record = {}, resourceView = state.view) {
+  const definition = definitions[resourceView];
+  if (!definition) {
+    showNotice(`The ${resourceView || "requested"} editor is unavailable.`);
+    return;
+  }
   $("#dialog-title").textContent = `${record.id ? "Edit" : "Add"} ${definition.title.replace(/s$/, "")}`;
   $("#dialog-help").textContent = definition.description;
   $("#form-error").textContent = "";
@@ -2799,7 +3355,12 @@ function openResourceDialog(record = {}) {
       input.step = "0.001";
       input.placeholder = "0.150";
     }
-    populateSpecialSelect(input, type);
+    if (name === "failover_after_seconds" || name === "return_after_seconds") {
+      input.min = "0";
+      input.max = "600";
+      input.step = "1";
+    }
+    populateSpecialSelect(input, type, resourceView);
     const current = formValue(record, name);
     if (type === "checkbox") input.checked = Boolean(current);
     else if (Array.isArray(current) && input.multiple) [...input.options].forEach(option => option.selected = current.map(String).includes(option.value));
@@ -2809,7 +3370,7 @@ function openResourceDialog(record = {}) {
   });
   appendFields(fields, definition.fields);
   appendFields(detailedFields, definition.detailedFields);
-  const isFlightSheet = state.view === "flight-sheets";
+  const isFlightSheet = resourceView === "flight-sheets";
   if (isFlightSheet) {
     const guidance = document.createElement("p");
     guidance.className = "field-help wide";
@@ -2827,7 +3388,13 @@ function openResourceDialog(record = {}) {
   fields.classList.remove("hidden");
   editorTabs.querySelectorAll(".editor-tab").forEach(button => button.classList.toggle("active", button.dataset.editorPane === "basic"));
   $("#delete-dialog-resource").classList.toggle("hidden", !isFlightSheet || !record.id);
-  $("#resource-form").dataset.id = record.id || "";
+  const resourceForm = $("#resource-form");
+  resourceForm.dataset.id = record.id || "";
+  resourceForm.dataset.resourceView = resourceView;
+  resourceForm.dataset.rigId = "";
+  resourceForm.dataset.sheetId = "";
+  resourceForm.querySelectorAll(".flight-sheet-save-modes").forEach(element => element.remove());
+  resourceForm.querySelector("#save-dialog-resource").classList.remove("hidden");
   $("#resource-dialog").showModal();
 }
 
@@ -2892,20 +3459,37 @@ function configureFlightSheetMinerChooser(fields) {
     <h3 class="wide">Custom miner</h3>
     <label>Miner name<input name="custom_name" placeholder="My custom miner"></label>
     <label>Version<input name="custom_version" placeholder="optional"></label>
-    <label>Executable name<input name="custom_binary_name" placeholder="miner"></label>
-    <label class="wide">Installation URL<input name="custom_url" type="url" placeholder="https://github.com/project/releases/download/version/miner.tar.gz"></label>
+    <label>Executable name<input name="custom_binary_name" placeholder="lpminer"></label>
+    <label>Package type<select name="custom_package_format"><option value="binary">Single executable</option><option value="tar.gz">Complete .tar.gz bundle</option></select></label>
+    <label class="wide">Public HTTPS installation URL<input name="custom_url" type="url" placeholder="https://example.com/miner-0.0.3.tar.gz"></label>
+    <label class="wide custom-bundle-field hidden">Executable path inside bundle<input name="custom_entry_point" placeholder="miner-package/miner"></label>
+    <label class="wide custom-bundle-field hidden">Environment variables, one NAME=value per line<textarea name="custom_environment" placeholder="LD_LIBRARY_PATH=lib"></textarea></label>
     <label class="wide">Wallet and worker template<input name="custom_wallet_template" value="{WALLET}.{WORKER}" placeholder="{WALLET}.{WORKER}"></label>
     <label class="wide">Extra config arguments<textarea name="custom_arguments" placeholder="One argument per line&#10;--pool&#10;{POOL}&#10;--wallet&#10;{WALLET}.{WORKER}"></textarea></label>
-    <p class="field-help wide">Miner Dash downloads a direct Linux executable or .tar.gz package, extracts only the named executable, and pins its SHA-256. It never runs installer scripts.</p>`;
+    <p class="field-help wide">Configure it here without leaving this flight sheet. For a .tar.gz bundle, select Complete bundle and enter the executable path inside it. Miner Dash preserves bundled libraries, verifies SHA-256, and never runs installer scripts. Use one argument per line; placeholders: {POOL}, {POOL_ENDPOINT}, {WALLET}, {WORKER}, {PASSWORD}, {COIN}, {ALGORITHM}.</p>`;
   fields.append(customFields);
+  const packageFormat = customFields.querySelector('[name="custom_package_format"]');
+  const updatePackageFields = () => {
+    const bundled = packageFormat.value === "tar.gz";
+    customFields.querySelectorAll(".custom-bundle-field").forEach(field => field.classList.toggle("hidden", !bundled));
+    customFields.querySelector('[name="custom_entry_point"]').required = minerSelect.value === "__custom__" && bundled;
+  };
   const updateCustomFields = () => {
     const custom = minerSelect.value === "__custom__";
     customFields.classList.toggle("hidden", !custom);
     ["custom_name", "custom_binary_name", "custom_url", "custom_wallet_template"].forEach(name => {
       customFields.querySelector(`[name="${name}"]`).required = custom;
     });
+    updatePackageFields();
   };
   minerSelect.addEventListener("change", updateCustomFields);
+  packageFormat.addEventListener("change", updatePackageFields);
+  customFields.querySelector('[name="custom_url"]').addEventListener("change", event => {
+    if (/\.tar\.gz(?:[?#].*)?$/i.test(event.currentTarget.value.trim())) {
+      packageFormat.value = "tar.gz";
+      updatePackageFields();
+    }
+  });
   updateCustomFields();
 }
 
@@ -2915,11 +3499,15 @@ function formValue(record, name) {
   return record[name];
 }
 
-function populateSpecialSelect(input, type) {
+function populateSpecialSelect(input, type, resourceView = state.view) {
   const maps = {"wallet-select": "wallets", "pool-select": "pools", "miner-select": "miners"};
   maps["flight-select"] = "flight-sheets";
-  if (type === "miner-select" && state.view === "flight-sheets") {
+  if (type === "miner-select" && resourceView === "flight-sheets") {
     input.add(new Option("Choose…", ""));
+    const createGroup = document.createElement("optgroup");
+    createGroup.label = "Create in this flight sheet";
+    createGroup.append(new Option("Build custom miner here…", "__custom__"));
+    input.append(createGroup);
     const installed = state.data.miners || [];
     const installedCatalogIDs = new Set(installed.map(miner => miner.catalog_id).filter(Boolean));
     const installedGroup = document.createElement("optgroup");
@@ -2946,7 +3534,6 @@ function populateSpecialSelect(input, type) {
       unavailableGroup.append(option);
     });
     if (unavailableGroup.children.length) input.append(unavailableGroup);
-    input.add(new Option("Custom miner — configure here", "__custom__"));
   } else if (maps[type]) {
     setOptions(input, state.data[maps[type]], "", "Choose…");
   }
@@ -2974,14 +3561,25 @@ function populateSpecialSelect(input, type) {
 
 async function saveResource(event) {
   event.preventDefault();
-  const definition = definitions[state.view];
+  const submitter = event.submitter;
+  const saveMode = submitter?.dataset.flightSaveMode || "update";
+  const resourceView = event.target.dataset.resourceView || state.view;
+  const definition = definitions[resourceView];
+  if (!definition) {
+    $("#form-error").textContent = "This editor no longer has a valid resource context.";
+    return;
+  }
   const formData = new FormData(event.target);
   const data = Object.fromEntries(formData.entries());
-  if (state.view === "farms") data.electricity_rate_usd_per_kwh = Number(data.electricity_rate_usd_per_kwh);
+  if (resourceView === "farms") data.electricity_rate_usd_per_kwh = Number(data.electricity_rate_usd_per_kwh);
+  if (resourceView === "flight-sheets") {
+    data.failover_after_seconds = Number(data.failover_after_seconds || 0);
+    data.return_after_seconds = Number(data.return_after_seconds || 0);
+  }
   if (data.extra_arguments !== undefined) data.extra_arguments = data.extra_arguments.split("\n").map(item => item.trim()).filter(Boolean);
   if (data.default_arguments !== undefined) data.default_arguments = data.default_arguments.split("\n").map(item => item.trim()).filter(Boolean);
   if (data.backup_pool_urls !== undefined) data.backup_pool_urls = data.backup_pool_urls.split("\n").map(item => item.trim()).filter(Boolean);
-  if (state.view === "overclocks") {
+  if (resourceView === "overclocks") {
     const setting = {selector: data.selector || "*"};
     ["power_limit_w", "fan_percent", "core_clock_mhz", "core_offset_mhz", "memory_clock_mhz", "memory_offset_mhz"].forEach(key => {
       if (data[key] !== "") setting[key] = Number(data[key]);
@@ -2990,14 +3588,24 @@ async function saveResource(event) {
     delete data.selector;
     data.settings = [setting];
   }
-  if (state.view === "schedules") {
+  if (resourceView === "schedules") {
     data.enabled = event.target.elements.enabled.checked;
     data.days = formData.getAll("days").map(Number);
     data.rig_ids = formData.getAll("rig_ids");
   }
-  if (state.view === "users") data.disabled = event.target.elements.disabled.checked;
+  if (resourceView === "users") data.disabled = event.target.elements.disabled.checked;
+  if (resourceView === "flight-sheets" && saveMode === "new") {
+    const originalName = String((state.data["flight-sheets"] || []).find(item => item.id === event.target.dataset.sheetId)?.name || data.name || "Flight sheet").trim();
+    const suggested = originalName ? `Copy of ${originalName}` : "Flight sheet";
+    const nextName = prompt("Name for the new flight sheet", suggested);
+    if (!nextName || !nextName.trim()) {
+      $("#form-error").textContent = "A name is required to save the new flight sheet.";
+      return;
+    }
+    data.name = nextName.trim();
+  }
   let binaryFile;
-  if (state.view === "miners") {
+  if (resourceView === "miners") {
     data.managed_binary = event.target.elements.managed_binary.checked;
     binaryFile = event.target.elements.binary_file.files[0];
     delete data.binary_file;
@@ -3008,18 +3616,24 @@ async function saveResource(event) {
   const createdResources = [];
   let saveCommitted = false;
   try {
-    if (state.view === "flight-sheets") {
+    if (resourceView === "flight-sheets") {
       await resolveInlineFlightSheetResources(data, createdResources);
     }
-    if (state.view === "flight-sheets" && String(data.miner_id).startsWith("catalog:")) {
+    if (resourceView === "flight-sheets" && String(data.miner_id).startsWith("catalog:")) {
       const catalogID = String(data.miner_id).slice("catalog:".length);
       const miner = await api(`/api/v1/rig-os/miners/${encodeURIComponent(catalogID)}`, {method: "POST"});
       data.miner_id = miner.id;
-    } else if (state.view === "flight-sheets" && String(data.miner_id).startsWith("community:")) {
+    } else if (resourceView === "flight-sheets" && String(data.miner_id).startsWith("community:")) {
       const communityID = String(data.miner_id).slice("community:".length);
       const miner = await api(`/api/v1/community-miners/${encodeURIComponent(communityID)}`, {method: "POST"});
       data.miner_id = miner.id;
-    } else if (state.view === "flight-sheets" && data.miner_id === "__custom__") {
+    } else if (resourceView === "flight-sheets" && data.miner_id === "__custom__") {
+      const customEnvironment = {};
+      for (const line of String(data.custom_environment || "").split("\n").map(item => item.trim()).filter(Boolean)) {
+        const separator = line.indexOf("=");
+        if (separator < 1) throw new Error(`Environment entry "${line}" must use NAME=value.`);
+        customEnvironment[line.slice(0, separator).trim()] = line.slice(separator + 1);
+      }
       const miner = await api("/api/v1/miners/import-url", {
         method: "POST",
         body: JSON.stringify({
@@ -3028,6 +3642,9 @@ async function saveResource(event) {
           algorithm: String(data.algorithm || "").trim(),
           url: String(data.custom_url || "").trim(),
           binary_name: String(data.custom_binary_name || "").trim(),
+          package_format: String(data.custom_package_format || "binary"),
+          entry_point: String(data.custom_entry_point || "").trim(),
+          environment: customEnvironment,
           default_arguments: String(data.custom_arguments || "").split("\n").map(item => item.trim()).filter(Boolean)
         })
       });
@@ -3035,8 +3652,30 @@ async function saveResource(event) {
       data.miner_id = miner.id;
       data.wallet_template = String(data.custom_wallet_template || "").trim();
     }
-    ["custom_name", "custom_version", "custom_binary_name", "custom_url", "custom_wallet_template", "custom_arguments"].forEach(key => delete data[key]);
-    const saved = await api(`/api/v1/${definition.endpoint}${id ? `/${id}` : ""}`, {method: id ? "PUT" : "POST", body: JSON.stringify(data)});
+    ["custom_name", "custom_version", "custom_binary_name", "custom_url", "custom_package_format", "custom_entry_point", "custom_environment", "custom_wallet_template", "custom_arguments"].forEach(key => delete data[key]);
+    const endpoint = `/api/v1/${definition.endpoint}${resourceView === "flight-sheets" && saveMode === "new" ? "" : id ? `/${id}` : ""}`;
+    const method = resourceView === "flight-sheets" && saveMode === "new" ? "POST" : id ? "PUT" : "POST";
+    const saved = await api(endpoint, {method, body: JSON.stringify(data)});
+    if (resourceView === "flight-sheets" && saveMode === "new") {
+      const rigID = event.target.dataset.rigId;
+      if (rigID) {
+        const rig = (state.data.rigs || []).find(item => item.id === rigID);
+        await api(`/api/v1/rigs/${rigID}/assignment`, {
+          method: "PUT",
+          body: JSON.stringify({
+            name: rig?.name || "",
+            farm_id: rig?.farm_id || "",
+            flight_sheet_id: saved.id,
+            overclock_profile_id: rig?.desired?.overclock_profile_id || "",
+            tags: rig?.tags || [],
+            estimated_power_w: Number(rig?.desired?.estimated_power_w || 0),
+            power_offset_w: Number(rig?.desired?.power_offset_w || 0),
+            watchdog: rig?.desired?.watchdog || {enabled: false},
+            autofan: rig?.desired?.autofan || {enabled: false}
+          })
+        });
+      }
+    }
     if (binaryFile) {
       const response = await fetch(`/api/v1/miners/${saved.id}/binary`, {method: "PUT", headers: {"Authorization": `Bearer ${state.token}`, "Content-Type": "application/octet-stream"}, body: binaryFile});
       if (!response.ok) throw new Error((await response.text()).trim() || response.statusText);
@@ -3149,6 +3788,7 @@ function toggleDualWorkload() {
     form.elements.secondary_device_type.value = secondaryType;
     form.elements.secondary_device_label.value = secondaryType;
     updateCoinPreview(form.elements.secondary_coin);
+    syncQuickSheetAlgorithmOptions(true);
   }
 }
 
@@ -3159,6 +3799,7 @@ function selectSavedWallet() {
   form.elements.coin.value = wallet.coin;
   form.elements.wallet_address.value = wallet.address;
   updateCoinPreview(form.elements.coin);
+  syncQuickSheetAlgorithmOptions();
 }
 
 function selectSavedPool() {
@@ -3302,18 +3943,29 @@ $("#logout").addEventListener("click", async () => {
 });
 $("#create-resource").addEventListener("click", () => openResourceDialog());
 $("#quick-sheet-form").addEventListener("submit", saveQuickSheet);
-$("#quick-sheet-form").elements.miner_choice.addEventListener("change", updateQuickMinerHelp);
+$("#quick-sheet-form").elements.miner_choice.addEventListener("change", () => {
+  syncQuickSheetAlgorithmOptions();
+  if (!$("#secondary-workload").classList.contains("hidden")) syncQuickSheetAlgorithmOptions(true);
+  updateQuickMinerHelp();
+});
 $("#quick-sheet-form").elements.wallet_choice.addEventListener("change", selectSavedWallet);
 $("#quick-sheet-form").elements.pool_choice.addEventListener("change", selectSavedPool);
 $("#toggle-dual-workload").addEventListener("click", toggleDualWorkload);
 $("#quick-sheet-form").elements.coin.addEventListener("input", event => {
-  const algorithms = {QRL: "qrandomx", ZCL: "equihash192_7", XMR: "rx/0"};
-  const algorithm = $("#quick-sheet-form").elements.algorithm;
-  const suggestion = algorithms[event.target.value.trim().toUpperCase()];
-  if (suggestion && !algorithm.value) algorithm.value = suggestion;
+  scheduleQuickSheetAlgorithmSync();
   updateCoinPreview(event.target);
 });
-$("#quick-sheet-form").elements.secondary_coin.addEventListener("input", event => updateCoinPreview(event.target));
+$("#quick-sheet-form").elements.algorithm.addEventListener("input", event => {
+  event.target.dataset.autofilled = "false";
+});
+$("#quick-sheet-form").elements.secondary_coin.addEventListener("input", event => {
+  scheduleQuickSheetAlgorithmSync(true);
+  updateCoinPreview(event.target);
+});
+$("#quick-sheet-form").elements.secondary_algorithm.addEventListener("input", event => {
+  event.target.dataset.autofilled = "false";
+});
+$("#quick-sheet-form").elements.secondary_device_type.addEventListener("change", () => syncQuickSheetAlgorithmOptions(true));
 $("#close-quick-sheet").addEventListener("click", () => $("#quick-sheet-dialog").close());
 $("#cancel-quick-sheet").addEventListener("click", () => $("#quick-sheet-dialog").close());
 $("#custom-miner-builder-form").addEventListener("submit", saveCustomMinerBuilder);

@@ -57,6 +57,9 @@ func runController(ctx context.Context, config appConfig, logger *log.Logger) er
 	if err != nil {
 		return err
 	}
+	if err := store.RefreshInstalledEmbeddedMinerPackages(ctx); err != nil {
+		return err
+	}
 	store.SetRecoveryCode(secretValues.RecoveryCode)
 	certFile := filepath.Join(config.dataDir, "tls.crt")
 	keyFile := filepath.Join(config.dataDir, "tls.key")

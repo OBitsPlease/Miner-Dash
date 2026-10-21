@@ -23,6 +23,12 @@ version. Never use NVIDIA `.run` installers. AMDGPU is in Ubuntu's kernel and
 Mesa stack; the script installs no third-party ROCm repository. Pin and review
 a vendor repository separately if a workload truly requires ROCm.
 
+The dashboard command console can query the rig's configured repositories for
+NVIDIA, AMD, and Intel packages and queue an exact package/version selection.
+On HiveOS NVIDIA rigs it lists and installs exact versions through the
+platform-provided `nvidia-driver-update` utility. A driver installation stops
+mining and requires a separate reboot confirmation.
+
 ## Enrollment and upgrades
 
 Enrollment consumes a root-only token file, waits for the per-agent identity,
@@ -43,6 +49,26 @@ sudo scripts/install-agent-release.sh rollback
 Review `journalctl --namespace=minerdash -u minerdash-agent` after activation.
 The dedicated journal namespace is compressed and bounded by its installed
 drop-in, without changing retention for other system services.
+
+## CPU workload optimization
+
+On Linux CPU-only workloads, the agent collects hashrate baselines separately
+for each coin and algorithm. It tests a performance CPU governor only when the
+current governor differs, keeps the change only after a stable measured
+improvement, and otherwise restores the original governor. The same governor
+trial is available for any CPU algorithm; it does not change miner-specific
+thread counts or algorithm settings.
+
+RandomX and QRandomX workloads additionally invoke the narrowly scoped
+`minerdash-cpu-setup@randomx.service`. It loads `msr` only when a module matching
+the running kernel exists, and requests 2,048 2 MiB huge pages (up to 4 GiB).
+Other CPU algorithms invoke `minerdash-cpu-setup@standard.service`, which
+restores the huge-page count recorded before RandomX preparation. If the kernel
+cannot provide the requested pool, mining continues and the EPIC launcher
+enables large pages only when at least 1,280 pages are free; otherwise it uses
+normal memory pages. The agent remains kernel-module restricted and is
+allow-listed only for the kernel's `cpu/msr` device group. Only the fixed,
+root-owned setup unit can load the module and adjust huge-page reservations.
 
 ## VLAN image builds
 

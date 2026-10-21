@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Miner Dash</title>
   <link rel="icon" href="/miningdash-icon.png" type="image/png">
-  <link rel="stylesheet" href="/style.css?v=70">
+  <link rel="stylesheet" href="/style.css?v=71">
 </head>
 <body>
   <section id="login" class="login-shell">
@@ -119,8 +119,12 @@
           <section id="discover-navigation" class="nav-flyout" aria-label="Discover">
             <div class="nav-flyout-heading"><div><strong>Discover</strong><small>Find profitable and new opportunities</small></div></div>
             <div class="nav-page-grid">
-              <button class="nav nav-page-tile" data-view="power-prices"><span>⚡</span><span><strong>Power &amp; Prices</strong><small>Profitability by power cost</small></span></button>
-              <button class="nav nav-page-tile" data-view="new-coins"><span>◉</span><span><strong>New Coin</strong><small>Recently launched PoW coins</small></span></button>
+              <button class="nav nav-page-tile" data-view="new-listings"><span>◉</span><span><strong>New Listings</strong><small>Recently announced PoW coins</small></span></button>
+              <button class="nav nav-page-tile" data-view="power-costs"><span>⚡</span><span><strong>Power Costs</strong><small>Electricity cost calculator</small></span></button>
+              <button class="nav nav-page-tile" data-view="pow-prices"><span>₿</span><span><strong>PoW Prices</strong><small>Live prices and network stats</small></span></button>
+              <button class="nav nav-page-tile" data-view="miner-calc"><span>∑</span><span><strong>Miner Calc</strong><small>Profit by hashrate and algorithm</small></span></button>
+              <button class="nav nav-page-tile" data-view="upcoming-events"><span>◷</span><span><strong>Upcoming Events</strong><small>Halvings, forks, and algo changes</small></span></button>
+              <button class="nav nav-page-tile" data-view="find-my-miner"><span>◎</span><span><strong>Find My Miner</strong><small>Scan your network for rigs</small></span></button>
             </div>
           </section>
         </div>
@@ -140,7 +144,7 @@
           </section>
         </div>
       </nav>
-      <span id="running-version" class="running-version">v1.0.2</span>
+      <span id="running-version" class="running-version">v1.0.3</span>
       <div class="connection"><i></i><span>Local controller</span></div>
     </aside>
 
@@ -217,7 +221,7 @@
       <div id="resource-fields" class="form-grid"></div>
       <div id="resource-detailed-fields" class="form-grid hidden"></div>
       <span id="form-error" class="error"></span>
-      <div class="dialog-actions"><button type="button" id="delete-dialog-resource" class="danger delete-dialog-resource hidden">Delete flight sheet</button><button type="button" id="cancel-dialog" class="secondary">Cancel</button><button type="submit">Save</button></div>
+      <div class="dialog-actions"><button type="button" id="delete-dialog-resource" class="danger delete-dialog-resource hidden">Delete flight sheet</button><button type="button" id="cancel-dialog" class="secondary">Cancel</button><button type="submit" id="save-dialog-resource">Save</button></div>
     </form>
   </dialog>
 
@@ -245,7 +249,7 @@
           <legend><span>3</span> Mining software</legend>
           <div class="form-grid">
             <label>Miner<select name="miner_choice" required></select></label>
-            <label>Algorithm<input name="algorithm" placeholder="e.g. randomx or equihash192_7" required></label>
+            <label>Algorithm<input name="algorithm" list="algorithm-options" placeholder="Choose a coin and miner" required><small id="quick-algorithm-help" class="field-help">MinerDash will identify the coin algorithm automatically.</small></label>
             <p id="quick-miner-help" class="field-help wide"></p>
             <div id="custom-miner-fields" class="form-grid wide hidden">
               <label>Custom miner name<input name="custom_name" placeholder="My new miner"></label>
@@ -268,7 +272,7 @@
             <label class="wide">Wallet<input name="secondary_wallet_address" list="wallet-options" placeholder="Public payout address"></label>
             <label class="wide">Pool<input name="secondary_pool_url" list="pool-options" placeholder="stratum+tcp://pool.example.com:3333"></label>
             <label>Pool password<input name="secondary_pool_password" value="x"></label>
-            <label>Algorithm<input name="secondary_algorithm" placeholder="e.g. randomx"></label>
+            <label>Algorithm<input name="secondary_algorithm" list="secondary-algorithm-options" placeholder="Choose a coin"></label>
           </div>
         </fieldset>
         <fieldset>
@@ -285,14 +289,16 @@
   <datalist id="coin-options">
     <option value="BTC"><option value="ETH"><option value="ETC"><option value="RVN">
     <option value="XMR"><option value="ZCL"><option value="VTC"><option value="YEC">
-    <option value="ERG"><option value="KAS"><option value="ALPH"><option value="QRL">
+    <option value="ERG"><option value="KAS"><option value="ALPH"><option value="QRL"><option value="EPIC">
   </datalist>
+  <datalist id="algorithm-options"></datalist>
+  <datalist id="secondary-algorithm-options"></datalist>
   <datalist id="wallet-options"></datalist>
   <datalist id="pool-options"></datalist>
 
   <dialog id="miner-package-dialog">
     <form id="miner-package-form">
-      <div class="dialog-heading"><div><h2 id="miner-package-title">Upload miner package</h2><p>Use the official Linux executable. MinerDash calculates and verifies its SHA-256 hash.</p></div><button type="button" id="close-miner-package" class="icon">×</button></div>
+      <div class="dialog-heading"><div><h2 id="miner-package-title">Upload miner package</h2><p>Use the official Linux executable. MinerDash calculates and verifies its SHA-256 hash before it can be sent to rigs.</p></div><button type="button" id="close-miner-package" class="icon">×</button></div>
       <input name="miner_id" type="hidden">
       <div class="form-grid">
         <label>Version<input name="version" placeholder="e.g. 1.21.0" required></label>
@@ -309,7 +315,7 @@
     <article class="rig-card">
       <div class="rig-heading">
         <div class="rig-icon">R</div>
-        <div class="rig-identity"><div class="rig-title-line"><h3></h3><span class="rig-kind"></span></div><p class="rig-meta"></p><div class="gpu-health-strip" aria-label="GPU temperature status"></div></div>
+        <div class="rig-identity"><div class="rig-title-line"><h3></h3><span class="rig-kind"></span></div><p class="rig-meta"></p><div class="rig-ip"></div><div class="gpu-health-strip" aria-label="GPU temperature status"></div></div>
         <div class="rig-heading-actions">
           <div class="focused-rig-switcher">
             <select class="focused-workspace-select" aria-label="Mining workspace"><option value="cpu-mining">CPU Mining</option><option value="gpu-mining">GPU Mining</option></select>
@@ -317,9 +323,10 @@
           </div>
           <div class="rig-workload-summary hidden"></div>
           <button class="miner-update-indicator hidden" type="button" aria-label="Miner update status"><img src="/miner-update.png" alt=""></button>
-          <span class="status"></span><button class="close-rig-focus secondary" type="button">Close</button>
+          <span class="status"></span><button class="remove-worker danger" type="button">Remove</button><button class="close-rig-focus secondary" type="button">Close</button>
         </div>
       </div>
+      <div class="rig-troubleshooting hidden" aria-live="polite"></div>
       <div class="rig-tabs" role="tablist" aria-label="Rig details">
         <button class="rig-tab active" data-rig-tab="overview" type="button">Overview</button>
         <button class="rig-tab" data-rig-tab="mining" type="button">Mining</button>
@@ -331,6 +338,7 @@
         <section class="coin-price-card"></section>
         <div class="gpu-list"></div>
         <div class="system-detail-grid"></div>
+        <section class="cpu-diagnostics hidden"></section>
       </section>
       <section class="rig-panel rig-mining-panel" data-rig-panel="mining">
         <div class="miner-row"></div>
@@ -339,6 +347,7 @@
         <div class="miner-links">
           <button class="miner-screen secondary" data-action="logs">Miner screen</button>
           <a class="button-link pool-link secondary" target="_blank" rel="noopener noreferrer">View at pool</a>
+          <button data-action="start" class="secondary">Start miner</button>
           <button data-action="restart" class="secondary">Restart miner</button>
           <button data-action="stop" class="danger">Stop miner</button>
         </div>
@@ -366,6 +375,50 @@
         </div>
         <div class="history-chart"><div class="empty simple-empty">Load history to inspect CPU or per-GPU performance trends.</div></div>
       </section>
+      <section class="shell-command-panel hidden">
+        <div class="rig-panel-heading"><div><span class="eyebrow">ADVANCED WORKER CONSOLE</span><h3>Run a command</h3></div></div>
+        <p class="shell-command-warning">Commands run as root within the Miner Dash agent service sandbox. Custom commands can change or damage this rig. Only run commands you understand.</p>
+        <div class="shell-command-presets" aria-label="Common diagnostic commands">
+          <button type="button" class="secondary" data-shell-command="uname -a">System version</button>
+          <button type="button" class="secondary" data-shell-command="printf 'Hostname: '; hostname; printf '\nIPv4 addresses:\n'; grep -B1 '32 host' /proc/net/fib_trie | grep -E '^[[:space:]]+[0-9]+\.' | sort -u; printf '\nInterfaces:\n'; cat /proc/net/dev">Network</button>
+          <button type="button" class="secondary" data-shell-command="lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS">Disks</button>
+          <button type="button" class="secondary" data-shell-command="df -h">Disk space</button>
+          <button type="button" class="secondary" data-shell-command="free -h">Memory</button>
+          <button type="button" class="secondary gpu-only-preset" data-shell-command="lspci -nnk | grep -A3 -Ei 'vga|3d|display'">GPU PCI and drivers</button>
+          <button type="button" class="secondary gpu-only-preset" data-shell-command="dmesg -T | grep -Ei 'nvrm|xid|amdgpu|gpu|fallen off|reset' | tail -n 80">GPU kernel errors</button>
+          <button type="button" class="secondary" data-shell-command="ip route; getent hosts $(hostname)">Network and DNS test</button>
+          <button type="button" class="secondary" data-shell-command="systemctl --failed --no-pager">Failed services</button>
+          <button type="button" class="secondary" data-shell-command="systemctl status minerdash-agent --no-pager">Agent status</button>
+          <button type="button" class="secondary" data-shell-command="journalctl --namespace=minerdash -u minerdash-agent -n 80 --no-pager">Agent logs</button>
+        </div>
+        <label class="shell-command-input-label">Command
+          <input class="shell-command-input" type="text" maxlength="4096" spellcheck="false" placeholder="Type a command">
+        </label>
+        <label class="shell-command-confirm"><input class="shell-command-confirm-check" type="checkbox"> I understand custom commands can modify or damage this rig.</label>
+        <div class="shell-command-actions"><button type="button" class="shell-command-run" disabled>Run command</button><span class="shell-command-status"></span></div>
+        <pre class="shell-command-output" aria-live="polite">Choose a common command above or enter one of your own.</pre>
+        <section class="driver-command-section">
+          <div class="rig-panel-heading"><div><span class="eyebrow">GPU DRIVER MANAGEMENT</span><h3>Available driver packages</h3></div></div>
+          <p>Select a GPU vendor to query the rig's configured Ubuntu repositories. Choose an exact package version to queue for installation.</p>
+          <div class="shell-command-actions">
+            <button type="button" class="driver-list-button secondary" data-driver-vendor="NVIDIA">NVIDIA</button>
+            <button type="button" class="driver-list-button secondary" data-driver-vendor="AMD">AMD</button>
+            <button type="button" class="driver-list-button secondary" data-driver-vendor="INTEL">Intel</button>
+            <span class="driver-list-status"></span>
+          </div>
+          <label class="driver-version-picker hidden">Driver package and version<select class="driver-version-select"></select></label>
+          <button type="button" class="driver-install-button danger hidden" disabled>Install selected driver</button>
+          <p class="driver-install-warning hidden">Mining will stop during installation. You will be asked to confirm a reboot after the package finishes.</p>
+        </section>
+        <section class="local-disk-install">
+          <div class="rig-panel-heading"><div><span class="eyebrow">OPTIONAL</span><h3>Install Rig OS to an internal drive</h3></div></div>
+          <p>This permanently erases the selected internal drive. The rig will be unavailable while the USB system is cloned. Remove the USB and boot the internal drive after cloning.</p>
+          <div class="shell-command-actions"><button type="button" class="scan-install-disks secondary">Scan internal drives</button><span class="install-disk-status"></span></div>
+          <label class="install-disk-picker hidden">Internal drive<select class="install-disk-select"></select></label>
+          <label class="install-disk-confirm hidden"><input class="install-disk-confirm-check" type="checkbox"> I understand this permanently erases the selected drive.</label>
+          <button type="button" class="install-disk-run danger hidden" disabled>Erase drive and install</button>
+        </section>
+      </section>
       <section class="rig-panel rig-settings-panel" data-rig-panel="settings">
         <div class="rig-panel-heading"><div><span class="eyebrow">WORKER CONTROL</span><h3>Configuration and safety</h3></div></div>
         <section class="driver-panel hidden">
@@ -376,24 +429,27 @@
         <div class="assignment-form">
           <label>Worker name<input class="worker-name"></label>
           <label>Farm<select class="farm-select"></select></label>
-          <label>Flight sheet<select class="flight-select"></select></label>
-          <label>Overclock profile<select class="oc-select"></select></label>
-          <label>Fixed wall estimate W<input class="estimated-power" type="number" min="0" max="100000" step="0.01" placeholder="CPU rigs"></label>
-          <label>System overhead W<input class="power-offset" type="number" min="0" max="100000" step="0.01" placeholder="Added to GPU sensors"></label>
-          <button class="gpu-tuning secondary"><span aria-hidden="true">&#9881;</span> GPU overclocks</button>
-          <button class="smart-tune">Smart Tune GPUs</button>
-          <button class="stop-smart-tune danger hidden">Stop smart tune</button>
+          <div class="flight-sheet-assignment">
+            <label>Flight sheet<select class="flight-select"></select></label>
+            <button type="button" class="secondary edit-flight-sheet-inline">Edit selected flight sheet</button>
+          </div>
+          <label class="gpu-only-setting">Overclock profile<select class="oc-select"></select></label>
+          <label class="cpu-only-setting">Fixed wall estimate W<input class="estimated-power" type="number" min="0" max="100000" step="0.01" placeholder="CPU rigs"></label>
+          <label class="gpu-only-setting">System overhead W<input class="power-offset" type="number" min="0" max="100000" step="0.01" placeholder="Added to GPU sensors"></label>
+          <button class="gpu-tuning gpu-only-setting secondary"><span aria-hidden="true">&#9881;</span> GPU overclocks</button>
+          <button class="smart-tune gpu-only-setting">Smart Tune GPUs</button>
+          <button class="stop-smart-tune gpu-only-setting danger hidden">Stop smart tune</button>
           <label>Tags<input class="tags" placeholder="spec, basement"></label>
           <label>Max temperature °C<input class="max-temp" type="number" min="0" max="110"></label>
           <label>Minimum hashrate<input class="min-hash" type="number" min="0" step="any"></label>
           <label>Restart delay seconds<input class="restart-delay" type="number" min="10"></label>
           <label>Reboot after failures<input class="reboot-failures" type="number" min="0"></label>
-          <label>Autofan target °C<input class="fan-target" type="number" min="0" max="100"></label>
-          <label>Autofan minimum %<input class="fan-min" type="number" min="0" max="100"></label>
-          <label>Autofan maximum %<input class="fan-max" type="number" min="0" max="100"></label>
-          <button class="save-assignment">Apply configuration</button>
+          <label class="gpu-only-setting">Autofan target °C<input class="fan-target" type="number" min="0" max="100"></label>
+          <label class="gpu-only-setting">Autofan minimum %<input class="fan-min" type="number" min="0" max="100"></label>
+          <label class="gpu-only-setting">Autofan maximum %<input class="fan-max" type="number" min="0" max="100"></label>
+          <button type="button" class="save-assignment">Apply configuration</button>
         </div>
-        <div class="smart-tune-status hidden"></div>
+        <div class="smart-tune-status gpu-only-setting hidden" aria-live="polite"></div>
         <div class="worker-actions">
           <button data-action="reboot" class="danger">Reboot rig</button>
           <button class="remove-worker danger">Remove worker</button>
@@ -433,6 +489,9 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=70"></script>
+  <script src="/hashrates.js?v=2"></script>
+  <script src="/discover.js?v=2"></script>
+  <script src="/discover_calc.js?v=1"></script>
+  <script src="/app.js?v=80"></script>
 </body>
 </html>

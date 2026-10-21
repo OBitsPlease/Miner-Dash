@@ -13,6 +13,7 @@ func TestQuickFlightSheetCreatesAndAppliesCompleteSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	identity, err := store.Enroll("cpu-rig", "enroll")
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +49,24 @@ func TestQuickFlightSheetCreatesAndAppliesCompleteSetup(t *testing.T) {
 	}
 }
 
+func TestQuickFlightSheetRejectsStockXMRigForVeil(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveQuickFlightSheet(protocol.QuickFlightSheetInput{
+		Name: "VEIL CPU", DeviceType: "CPU", Coin: "VEIL",
+		WalletAddress: "bv-wallet", PoolURL: "stratum+tcp://veil.invalid:3335",
+		PoolPassword: "x", CatalogID: "xmrig", Algorithm: "rx/veil",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Veil CPU Miner") {
+		t.Fatalf("stock XMRig VEIL error = %v", err)
+	}
+	if len(store.ListMiners()) != 0 {
+		t.Fatal("rejected quick setup retained a stock XMRig definition")
+	}
+}
+
 func TestQuickFlightSheetReusesWalletPoolAndMiner(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
 	if err != nil {
@@ -74,6 +93,7 @@ func TestQuickFlightSheetBuildsSingleSRBCPUWorkload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	identity, err := store.Enroll("cpu-rig", "enroll")
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +122,74 @@ func TestQuickFlightSheetBuildsSingleSRBCPUWorkload(t *testing.T) {
 	}
 	if len(resolved.Miner.ExtraArguments) != 0 {
 		t.Fatalf("single CPU extra arguments = %#v, want none", resolved.Miner.ExtraArguments)
+	}
+}
+
+func TestQuickFlightSheetBuildsEpicCPURandomXWorkload(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.Enroll("epic-cpu", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.SaveQuickFlightSheet(protocol.QuickFlightSheetInput{
+		Name: "Epic Solo", DeviceType: "CPU", Coin: "EPIC", WalletAddress: "epic-wallet",
+		PoolURL: "stratum+tcp://192.0.2.44:3416", PoolPassword: "x",
+		CatalogID: "epic-miner", Algorithm: "randomx", RigIDs: []string{identity.AgentID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FlightSheet.Coin != "EPIC" || result.FlightSheet.Algorithm != "randomx" {
+		t.Fatalf("Epic quick setup = %#v", result)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Pool.URL != "stratum+tcp://192.0.2.44:3416" {
+		t.Fatalf("resolved Epic endpoint = %q", resolved.Pool.URL)
+	}
+	if got := strings.Join(resolved.Miner.DefaultArguments, " "); got != "--stratum {POOL} --stratum-login {STRATUM_LOGIN}" {
+		t.Fatalf("Epic arguments = %q", got)
+	}
+	if resolved.Miner.StatsType != "" {
+		t.Fatalf("Epic telemetry mode = %q, want generic", resolved.Miner.StatsType)
+	}
+}
+
+func TestQuickFlightSheetRejectsNonRandomXForEpicMiner(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.SaveQuickFlightSheet(protocol.QuickFlightSheetInput{
+		Name: "Invalid Epic", DeviceType: "CPU", Coin: "EPIC", WalletAddress: "epic-wallet",
+		PoolURL: "stratum+tcp://pool.invalid:3416", CatalogID: "epic-miner", Algorithm: "progpow",
+	})
+	if err == nil || !strings.Contains(err.Error(), "only randomx") {
+		t.Fatalf("non-RandomX Epic setup error = %v", err)
+	}
+}
+
+func TestQuickFlightSheetRejectsNonRandomXForInstalledEpicMiner(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	miner, err := store.InstallCatalogMiner("epic-miner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveQuickFlightSheet(protocol.QuickFlightSheetInput{
+		Name: "Invalid Installed Epic", DeviceType: "CPU", Coin: "EPIC", WalletAddress: "epic-wallet",
+		PoolURL: "stratum+tcp://pool.invalid:3416", MinerID: miner.ID, Algorithm: "progpow",
+	})
+	if err == nil || !strings.Contains(err.Error(), "only randomx") {
+		t.Fatalf("non-RandomX installed Epic setup error = %v", err)
 	}
 }
 

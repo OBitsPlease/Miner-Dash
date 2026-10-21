@@ -27,6 +27,11 @@ install -d -o root -g root -m 0700 /opt/minerdash/miners
 install -d -o root -g root -m 0755 /usr/share/doc/minerdash-linux
 install -o root -g root -m 0644 "$linux/OPERATIONS.md" /usr/share/doc/minerdash-linux/OPERATIONS.md
 install -o root -g root -m 0644 "$linux/minerdash-agent.service" /etc/systemd/system/minerdash-agent.service
+install -o root -g root -m 0644 "$linux/minerdash-cpu-setup@.service" \
+  /etc/systemd/system/minerdash-cpu-setup@.service
+install -o root -g root -m 0755 "$linux/minerdash-cpu-setup.sh" \
+  /usr/local/sbin/minerdash-cpu-setup
+install -d -o root -g root -m 0700 /var/lib/minerdash/cpu-setup
 install -d -o root -g root -m 0755 /etc/systemd/journald@minerdash.conf.d
 install -o root -g root -m 0644 "$linux/journald-minerdash.conf" \
   /etc/systemd/journald@minerdash.conf.d/60-retention.conf

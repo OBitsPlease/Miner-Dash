@@ -28,15 +28,23 @@ command -v systemctl >/dev/null || die "systemd is required"
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 service="$root/deploy/linux/minerdash-agent.service"
 journal="$root/deploy/linux/journald-minerdash.conf"
+journal="$root/deploy/linux/journald-minerdash.conf"
 release_installer="$root/scripts/install-agent-release.sh"
 enroller="$root/scripts/enroll-linux-agent.sh"
-[[ -f "$service" && -f "$journal" && -f "$release_installer" && -f "$enroller" ]] ||
+cpu_setup_service="$root/deploy/linux/minerdash-cpu-setup@.service"
+cpu_setup_script="$root/deploy/linux/minerdash-cpu-setup.sh"
+[[ -f "$service" && -f "$journal" && -f "$release_installer" && -f "$enroller" &&
+  -f "$cpu_setup_service" && -f "$cpu_setup_script" ]] ||
   die "copy the complete MinerDash bundle before running this installer"
 
 install -d -o root -g root -m 0700 /etc/minerdash /var/lib/minerdash /opt/minerdash/miners
 install -d -o root -g root -m 0755 /opt/minerdash/agent/releases /usr/local/sbin
 install -d -o root -g root -m 0755 /etc/systemd/journald@minerdash.conf.d
 install -o root -g root -m 0644 "$service" /etc/systemd/system/minerdash-agent.service
+install -o root -g root -m 0644 "$cpu_setup_service" \
+  /etc/systemd/system/minerdash-cpu-setup@.service
+install -o root -g root -m 0755 "$cpu_setup_script" /usr/local/sbin/minerdash-cpu-setup
+install -d -o root -g root -m 0700 /var/lib/minerdash/cpu-setup
 install -o root -g root -m 0644 "$journal" /etc/systemd/journald@minerdash.conf.d/60-retention.conf
 install -o root -g root -m 0755 "$enroller" /usr/local/sbin/minerdash-enroll
 bash "$release_installer" stage "$agent" "$agent_sha"

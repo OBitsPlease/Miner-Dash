@@ -1,9 +1,9 @@
 # MinerDash
 
 MinerDash is a local-first CPU and GPU mining management platform. A controller
-runs as a Windows service and serves a browser dashboard. Linux workers run a
-small agent that monitors hardware, applies assigned mining configurations, and
-executes a restricted command set.
+runs as a background service on Windows, macOS, or Linux and serves a browser
+dashboard. Linux workers run a small agent that monitors hardware, applies
+assigned mining configurations, and executes supported management actions.
 
 MinerDash has no billing, hosted control plane, pool preference, developer
 wallet, or built-in hashrate redirection. Wallet entries are public payout
@@ -13,7 +13,7 @@ addresses only. Never put wallet seed phrases or private keys on a mining rig.
 
 No repository clone or command line is required.
 
-1. Download **[MinerDash-Setup-1.0.2.exe](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.2/MinerDash-Setup-1.0.2.exe)**.
+1. Download **[MinerDash-Setup-1.0.4.exe](https://github.com/OBitsPlease/Miner-Dash/releases/download/v1.0.4/MinerDash-Setup-1.0.4.exe)**.
 2. Double-click the installer and approve the Windows administrator prompt.
 3. Save the first-login credentials displayed during setup.
 4. Open the **Mining Dash** desktop shortcut.
@@ -21,6 +21,32 @@ No repository clone or command line is required.
 Miner Dash is currently a beta and the installer is not yet code-signed.
 Windows SmartScreen may require **More info → Run anyway**. Release downloads
 also include SHA-256 checksums so the installer can be verified before use.
+
+## Install on macOS
+
+1. Download **MinerDash-Controller-1.0.4.pkg** from the
+   [1.0.4 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.4).
+2. Open it and approve the administrator prompt. The package is not notarized
+   yet, so Gatekeeper may require **System Settings → Privacy & Security → Open
+   Anyway**.
+3. The controller installs to `/usr/local/minerdash`, stores its data in
+   `/usr/local/var/minerdash-controller`, and starts automatically through the
+   `com.minerdash.controller` launch daemon.
+4. Open <https://localhost:8443>.
+
+## Install on Linux
+
+1. Download **minerdash-controller_1.0.4_amd64.deb** (or the `arm64` build) from
+   the [1.0.4 release](https://github.com/OBitsPlease/Miner-Dash/releases/tag/v1.0.4).
+2. Install it with `sudo apt install ./minerdash-controller_1.0.4_amd64.deb`.
+3. The controller installs to `/opt/minerdash`, stores its data in
+   `/var/lib/minerdash-controller`, and runs as the `minerdash-controller`
+   systemd service.
+4. Open `https://<this-host>:8443`.
+
+On distributions without `dpkg`, download
+**minerdash-controller-1.0.4-linux.tar.gz**, extract it, and run
+`sudo ./install.sh`.
 
 ## Platform features
 
@@ -37,6 +63,8 @@ also include SHA-256 checksums so the installer can be verified before use.
 - Farm overview totals for online rigs, GPU count, active CPU mining threads, power, coins,
   and hashrates grouped by workload
 - SRBMiner-MULTI CPU + GPU dual-coin flight sheets
+- Epic Cash CPU RandomX mining with an embedded, SHA-256-pinned official miner package
+- Epic Stratum algorithm detection with automatic CPU flight-sheet fallback and return
 - HTTPS Custom Miner imports with server-side SHA-256 pinning
 - Hourly cached official GitHub release checks and one-click verified updates for supported catalog miners
 - Per-rig orange/gray miner-update indicators with official release notes and assigned-rig rollout
@@ -50,9 +78,10 @@ also include SHA-256 checksums so the installer can be verified before use.
 - Local or controller-managed miner executables
 - SHA-256 verification before a managed miner is executed
 - Reviewed source URL and commit metadata for miner packages
-- NVIDIA and AMD GPU inventory and telemetry
+- NVIDIA, AMD, and Intel GPU inventory and telemetry
 - Per-GPU driver, VBIOS/firmware, and PCI identity reporting
-- Stable Ubuntu-family NVIDIA and AMD driver updates without third-party OS scripts or repositories
+- Command-console NVIDIA, AMD, and Intel driver discovery with exact repository package/version selection
+- Exact-version HiveOS NVIDIA updates through the platform-provided `nvidia-driver-update` utility
 - Private local driver-efficiency learning by GPU model, coin, algorithm, and driver, with a 60-minute evidence threshold and update guard
 - Gear-based per-GPU overclock editor with one-click import of locally measured knowledge presets
 - Per-GPU 24-hour activity, temperature, fan, power, algorithm hashrate, and total-power charts
@@ -66,6 +95,9 @@ also include SHA-256 checksums so the installer can be verified before use.
 - One-minute telemetry history with at least 32-day retention, date/range navigation, and SVG chart downloads
 - Local schedules for flight sheets and worker actions
 - Miner log retrieval
+- Per-rig command console with common diagnostic presets and an advanced command field
+- Discover workspaces for new listings, power costs, proof-of-work prices, mining profitability,
+  network events, and local miner discovery (see below)
 - Reboot, shutdown, start, stop, and restart commands
 - Administrator, operator, and read-only viewer accounts
 - Activity audit log
@@ -75,15 +107,46 @@ also include SHA-256 checksums so the installer can be verified before use.
 - Persistent Rig OS images that boot and mine directly from USB
 - Optional USB-to-local-drive installation
 - Built-in miner catalog with controller-managed package updates
+- Epic Cash guided setup with the official Epic CPU miner for CPU RandomX only;
+  its defaults use all logical cores and disable explicit large pages because
+  unsupported huge-page allocations cause the official miner's solver threads to exit
+
+## Discover workspaces
+
+The Discover navigation group contains six research tools. Market pages cache upstream
+responses in the controller and keep serving the last good result if a source is briefly
+unavailable, so the dashboard never blocks on a third-party site.
+
+| Page | What it shows | Data source |
+| --- | --- | --- |
+| New Listings | Proof-of-work coins whose announcement topic was created in the last 14 days, using the first-post date so recent replies cannot make an old coin appear new; persisted topic IDs limit cached refreshes to the newest board page and unseen threads | Bitcointalk alternate cryptocurrencies announcement board |
+| Power Costs | Electricity calculator for one miner or a whole farm, including power-supply losses, runtime hours, billing cycle, and net profit | Local only; pre-filled from your online rigs and farm electricity rate |
+| PoW Prices | Searchable, sortable table of price, 1h/24h/7d change, volume, market cap, network and pool hashrate, 7-day difficulty change, and emissions | MiningPoolStats, with short-term price changes from CoinGecko |
+| Miner Calc | Select GPU, CPU, and ASIC models and quantities, fill live hardware benchmarks and algorithm power automatically, then request WhatToMine's parameterized rewards and merge dynamic MiningPoolStats coins into the ranked table; NonKYC-listed custom coins use the executable best bid after its 0.2% trading fee instead of an indicative directory price | WhatToMine, Hashrate.no, MiningPoolStats, and NonKYC |
+| Upcoming Events | Halvings, algorithm changes, and forks with day countdowns, split into upcoming and recently passed | MiningPoolStats calendar |
+| Find My Miner | Local network scan that fingerprints mining hardware and flags addresses that are not enrolled yet | Your own network |
+
+Find My Miner sweeps the selected private IPv4 subnet using the controller's ARP table and
+TCP connection probes on common miner and management ports. It never sends ICMP and never
+needs elevated privileges, so it works from an unprivileged controller service. Responding
+hosts are fingerprinted from HTTP titles, headers, and miner API banners, then rated
+confirmed, likely, possible, or unknown. Addresses that already belong to an enrolled rig
+are labelled so new hardware stands out.
 
 ## Security model
 
-- Miner commands are executed directly. They are never passed through a shell.
+- Miner executable commands are executed directly and never passed through a shell.
+- Advanced per-rig dashboard commands run through Bash as root within the agent's
+  systemd service sandbox, require operator confirmation, and have bounded runtime
+  and output.
 - Preinstalled miner executable paths must be absolute.
 - Managed miners are downloaded only from the pinned local controller and must
   match their recorded SHA-256 digest.
+- The Epic CPU miner is seeded from the controller's bundled, SHA-256-pinned
+  package; it does not relax the GitHub-only policy for remote catalog downloads.
 - Agents may download only the miner currently assigned to them.
-- The controller accepts a fixed command allowlist.
+- The controller validates management actions; custom shell commands are explicit
+  operator-issued requests for a single online rig.
 - Passwords use PBKDF2-HMAC-SHA256 with unique salts and 210,000 iterations.
 - Administrator and agent bearer tokens are stored as SHA-256 hashes.
 - Browser sessions use bearer tokens in session storage, not cookies.
@@ -151,11 +214,33 @@ The Workers page groups reporting machines into GPU rigs and CPU-only rigs.
 Each worker retains its own telemetry, flight sheet, overclock profile,
 watchdog, autofan policy, logs, and start/stop/reboot controls.
 
+GPU tuning revisions are applied only after the agent preflights required
+hardware controls. A failed fan or clock-offset preflight does not change power
+or clocks, leaves the desired revision unapplied, and reports the exact error on
+the worker's Settings tab. Changing or clearing an applied clock, offset, power,
+or fan value resets only the removed controls before applying the replacement
+profile. NVIDIA locked clocks and offsets are mutually exclusive per control.
+GPU Mining provides an optional controller-wide maximum power limit per GPU.
+When enabled, the controller clamps assigned overclock profiles and Smart Tune
+to that ceiling, and compatible agents periodically reapply it. A lower
+per-GPU profile limit remains effective. The default is disabled (`0`); set the
+limit on the GPU Mining page to protect every current and future GPU rig on
+that controller. The agent reports the driver's current power limit in GPU
+telemetry, and surfaces an error if it cannot enforce the configured ceiling.
+
 Use **GPU Mining** or **CPU Mining** for normal setup. The guided form creates
 or reuses the wallet, pool, and miner records automatically and can apply the
 new flight sheet to any number of selected rigs. The separate resource pages
 remain under **Advanced configuration** for operators who need direct editing.
 Saved wallets and pools appear as choices but can also be entered inline.
+The guided form resolves a coin's algorithm from MiningPoolStats first and
+uses the verified New Listings feed when a newly announced coin is not indexed
+there yet. It translates that result to the selected miner's command value
+(for example, XMR/RandomX becomes `rx/0` for XMRig). If neither coin source
+has a match, the algorithm field offers only values supported by the selected
+miner. The controller refreshes the validated per-miner capability catalog
+from `internal/server/miner_algorithms.json` on the public Miner Dash
+repository every six hours and falls back to its bundled copy when offline.
 
 Choosing **Custom Miner** in the guided flight-sheet form provides the compact
 name, HTTPS installation URL, executable, algorithm, wallet/worker template,
@@ -351,11 +436,14 @@ Downloads use short-lived tickets so large images stream through the browser
 without putting administrator credentials in a URL.
 
 The catalog includes Rigel, WildRig Multi, SRBMiner-MULTI, miniZ, XMRig,
+Epic CPU Miner,
 lolMiner, TeamRedMiner, BzMiner, GMiner, T-Rex, Ethminer, Hellminer,
 OneZeroMiner, QubMiner, CPUMiner-OPT, BCIII Hash Miner, and a permanent Custom
 miner option. Rigel, WildRig Multi, SRBMiner-MULTI, miniZ, lolMiner, BzMiner,
 and OneZeroMiner support automatic installation from allow-listed official
-release repositories; XMRig is included in Rig OS. Selecting one of these in
+release repositories; XMRig is included in Rig OS. Veil CPU mining uses the
+separate fee-free Veil CPU Miner because stock XMRig does not implement
+`rx/veil`. Selecting one of these in
 the guided flight-sheet form downloads and hashes it on the controller, assigns
 the sheet, and causes each selected agent to download, verify, and start it.
 Entries without a safe current Linux release remain available for monitored or
@@ -363,6 +451,26 @@ manual setup and explain the applicable compatibility or package limitation.
 Changing that rig to another flight sheet stops the previous miner and performs
 the same verified installation and start sequence for the newly selected
 software.
+
+### Epic Cash CPU mining and fallback
+
+Epic CPU Miner supports RandomX. Epic rotates among RandomX, ProgPow, and
+Cuckatoo, so an Epic CPU flight sheet can reference another CPU flight sheet
+as its automatic fallback:
+
+1. Create the fallback CPU flight sheet, such as QRL with XMRig.
+2. Create or edit the Epic CPU flight sheet with algorithm `randomx` and the
+   Epic Stratum URL, such as `stratum+tcp://192.168.1.79:3416`.
+3. In Detailed miner config, select the fallback flight sheet. Optional delay
+   fields default to 10 seconds before failover and 15 seconds before returning.
+4. Assign only the Epic flight sheet to the CPU rig.
+
+The agent queries Epic Stratum's `getjobtemplate` method every five seconds.
+It starts the fallback when the node is unavailable, syncing, or currently
+requests a non-RandomX algorithm. It returns to Epic after RandomX remains
+available for the configured stability interval. The worker card reports the
+active coin, observed Epic algorithm, and switch reason. The Epic reward wallet
+is configured on the solo Stratum host; it is not sent to mining rigs.
 
 Most GPU miners are proprietary. Automatic installation downloads their public
 release archive for private use on your rigs; review each vendor's license and

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -22,12 +23,14 @@ var minerCatalog = []protocol.MinerCatalogEntry{
 	{ID: "srbminer-multi", Name: "SRBMiner-MULTI", Description: "CPU and AMD/NVIDIA GPU multi-algorithm miner.", Hardware: []string{"CPU", "AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded from the official release repository for use on your rigs; review the vendor license.", SourceURL: "https://github.com/doktor83/SRBMiner-Multi/releases", BinaryName: "SRBMiner-MULTI", DefaultArguments: []string{"--pool", "{POOL}", "--wallet", "{WALLET}", "--password", "{PASSWORD}", "--worker", "{WORKER}"}, AlgorithmFlag: "--algorithm", PackageRequired: true, AutomaticInstall: true},
 	{ID: "miniz", Name: "miniZ", Description: "NVIDIA-focused Equihash-family GPU miner with local telemetry.", Hardware: []string{"NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded directly from the official GitHub release for private use; review the vendor terms.", SourceURL: "https://github.com/miniZ-miner/miniZ/releases", BinaryName: "miniZ", DefaultArguments: []string{"--url={WALLET}.{WORKER}@{POOL_ENDPOINT}", "--pass={PASSWORD}", "--telemetry=127.0.0.1:20000", "--gpu-line"}, AlgorithmFlag: "--par", PackageRequired: true, AutomaticInstall: true},
 	{ID: "xmrig", Name: "XMRig", Description: "Open-source CPU and AMD/NVIDIA RandomX miner.", Hardware: []string{"CPU", "AMD", "NVIDIA"}, License: "GPL-3.0", Redistribution: "The signed Ubuntu package is included in Rig OS; GPL source remains available from Ubuntu.", SourceURL: "https://github.com/xmrig/xmrig", BinaryName: "xmrig", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}", "-p", "{PASSWORD}", "--rig-id", "{WORKER}", "--http-host", "127.0.0.1", "--http-port", "18080"}, AlgorithmFlag: "-a", ImageIncluded: true},
-	{ID: "lolminer", Name: "lolMiner", Description: "AMD and NVIDIA multi-algorithm GPU miner.", Hardware: []string{"AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded directly from the official GitHub release for private use; review the bundled license.", SourceURL: "https://github.com/Lolliedieb/lolMiner-releases/releases", BinaryName: "lolMiner", DefaultArguments: []string{"--pool", "{POOL}", "--user", "{WALLET}.{WORKER}", "--pass", "{PASSWORD}"}, AlgorithmFlag: "--algo", PackageRequired: true, AutomaticInstall: true},
-	{ID: "teamredminer", Name: "TeamRedMiner", Description: "AMD GPU optimized multi-algorithm miner.", Hardware: []string{"AMD"}, License: "Proprietary", Redistribution: "Operator must obtain the binary and written redistribution permission.", SourceURL: "https://github.com/todxx/teamredminer", BinaryName: "teamredminer", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"}, AlgorithmFlag: "-a", PackageRequired: true},
+	{ID: "veil-miner-cpu", Name: "Veil CPU Miner", Description: "Veil-specific, fee-free XMRig fork supporting only the rx/veil CPU algorithm.", Hardware: []string{"CPU"}, License: "GPL-3.0", Redistribution: "Downloaded from the Veil CPU miner release repository; release archives are built in public CI and verified against GitHub's SHA-256 digest.", SourceURL: "https://github.com/ohcee/Veil-Miner-CPU/releases", BinaryName: "xmrig", Algorithm: "rx/veil", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}", "-p", "{PASSWORD}", "--rig-id", "{WORKER}", "--http-host", "127.0.0.1", "--http-port", "18080"}, AlgorithmFlag: "-a", StatsType: "xmrig", StatsURL: "http://127.0.0.1:18080/2/summary", PackageRequired: true, AutomaticInstall: true},
+	{ID: "veil-miner-gpu", Name: "Veil GPU Miner", Description: "Official Veil NVIDIA CUDA miner for Veil ProgPow.", Hardware: []string{"NVIDIA"}, License: "See upstream repository", Redistribution: "Downloaded from the official Veil Project release repository; verify the release checksum and review upstream terms.", SourceURL: "https://github.com/Veil-Project/Veil-Miner/releases", BinaryName: "veilminer", Algorithm: "progpow-veil", DefaultArguments: []string{"--cuda", "-P", "stratum+tcp://{WALLET}@{POOL_ENDPOINT}"}, AlgorithmFlag: "", PackageRequired: true, AutomaticInstall: true},
+	{ID: "epic-miner", Name: "Epic CPU Miner", Version: "2.3.3", Description: "Official Epic Cash CPU RandomX miner. CPU RandomX only; Epic also schedules ProgPow and Cuckatoo workloads.", Hardware: []string{"CPU"}, License: "Apache-2.0", Redistribution: "A locally verified Linux amd64 package is embedded in the controller and pinned by SHA-256; upstream publishes source but no release assets.", SourceURL: "https://github.com/EpicCash/epic-miner", SourceCommit: "9e33237186e380480a982f57fbab6c1ab3743724", BinaryName: "epic-miner-launch", Algorithm: "randomx", DefaultArguments: []string{"--stratum", "{POOL}", "--stratum-login", "{STRATUM_LOGIN}"}, PackageFormat: "tar.gz", EntryPoint: "epic-miner-launch", PackageSHA256: "8abb5712a985fca571cbe0780b8f7554dbac6ac1d1f5eb0c9bcdcd75e50ce2e0", Environment: map[string]string{"XDG_STATE_HOME": "/var/lib/minerdash"}, PackageRequired: true, AutomaticInstall: true}, {ID: "lolminer", Name: "lolMiner", Description: "AMD and NVIDIA multi-algorithm GPU miner.", Hardware: []string{"AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded directly from the official GitHub release for private use; review the bundled license.", SourceURL: "https://github.com/Lolliedieb/lolMiner-releases/releases", BinaryName: "lolMiner", DefaultArguments: []string{"--pool", "{POOL}", "--user", "{WALLET}.{WORKER}", "--pass", "{PASSWORD}"}, AlgorithmFlag: "--algo", PackageRequired: true, AutomaticInstall: true},
+	{ID: "teamredminer", Name: "TeamRedMiner", Description: "AMD GPU optimized multi-algorithm miner.", Hardware: []string{"AMD"}, License: "Proprietary", Redistribution: "Downloaded from the official TeamRedMiner GitHub release for use on your rigs; review the vendor terms.", SourceURL: "https://github.com/todxx/teamredminer/releases", BinaryName: "teamredminer", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"}, AlgorithmFlag: "-a", PackageRequired: true, AutomaticInstall: true},
 	{ID: "bzminer", Name: "BzMiner", Description: "AMD, NVIDIA, and Intel GPU multi-algorithm miner.", Hardware: []string{"AMD", "NVIDIA", "Intel GPU"}, License: "Proprietary", Redistribution: "Downloaded directly from the official GitHub release for private use; review the vendor terms.", SourceURL: "https://github.com/bzminer/bzminer/releases", BinaryName: "bzminer", DefaultArguments: []string{"-p", "{POOL}", "-w", "{WALLET}", "--worker_name", "{WORKER}"}, AlgorithmFlag: "-a", PackageRequired: true, AutomaticInstall: true},
-	{ID: "gminer", Name: "GMiner", Description: "AMD and NVIDIA multi-algorithm GPU miner.", Hardware: []string{"AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Operator must obtain the binary and any required redistribution permission.", SourceURL: "https://github.com/develsoftware/GMinerRelease/releases", BinaryName: "miner", DefaultArguments: []string{"--server", "{POOL}", "--user", "{WALLET}.{WORKER}", "--pass", "{PASSWORD}"}, AlgorithmFlag: "--algo", PackageRequired: true},
-	{ID: "trex", Name: "T-Rex", Description: "NVIDIA multi-algorithm GPU miner.", Hardware: []string{"NVIDIA"}, License: "Proprietary", Redistribution: "Operator must obtain the binary and any required redistribution permission.", SourceURL: "https://github.com/trexminer/T-Rex/releases", BinaryName: "t-rex", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"}, AlgorithmFlag: "-a", PackageRequired: true},
-	{ID: "ethminer", Name: "Ethminer", Description: "Archived Ethereum GPU miner; the latest Linux builds target legacy CUDA 8/9.", Hardware: []string{"AMD", "NVIDIA"}, License: "GPL-3.0", Redistribution: "Upstream is archived and its 2019 binaries may not support current drivers. Manual compatibility review is required.", SourceURL: "https://github.com/ethereum-mining/ethminer/releases", BinaryName: "ethminer", DefaultArguments: []string{"-P", "{POOL}"}, AlgorithmFlag: "-A", PackageRequired: true},
+	{ID: "gminer", Name: "GMiner", Description: "AMD and NVIDIA multi-algorithm GPU miner.", Hardware: []string{"AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded from the official GMiner GitHub release for use on your rigs; review the vendor terms.", SourceURL: "https://github.com/develsoftware/GMinerRelease/releases", BinaryName: "miner", DefaultArguments: []string{"--server", "{POOL}", "--user", "{WALLET}.{WORKER}", "--pass", "{PASSWORD}"}, AlgorithmFlag: "--algo", PackageRequired: true, AutomaticInstall: true},
+	{ID: "trex", Name: "T-Rex", Description: "NVIDIA multi-algorithm GPU miner.", Hardware: []string{"NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded from the official T-Rex GitHub release for use on your rigs; review the vendor terms.", SourceURL: "https://github.com/trexminer/T-Rex/releases", BinaryName: "t-rex", DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"}, AlgorithmFlag: "-a", PackageRequired: true, AutomaticInstall: true, StatsType: "trex", StatsURL: "http://127.0.0.1:4067/summary"},
+	{ID: "ethminer", Name: "Ethminer", Description: "Archived Ethereum GPU miner; the latest Linux builds target legacy CUDA 8/9.", Hardware: []string{"AMD", "NVIDIA"}, License: "GPL-3.0", Redistribution: "Downloaded from the archived official Ethminer GitHub release; its legacy CUDA requirements still require operator compatibility review.", SourceURL: "https://github.com/ethereum-mining/ethminer/releases", BinaryName: "ethminer", DefaultArguments: []string{"-P", "{POOL}"}, AlgorithmFlag: "-A", PackageRequired: true, AutomaticInstall: true},
 	{ID: "hellminer", Name: "Hellminer", Description: "VerusHash CPU miner maintained as source files without official release packages.", Hardware: []string{"CPU"}, License: "Unspecified", Redistribution: "No official GitHub release archive or redistribution grant is available. Manual reviewed package only.", SourceURL: "https://github.com/vrscms/hellminer", BinaryName: "hellminer", DefaultArguments: []string{"-c", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"}, AlgorithmFlag: "", PackageRequired: true},
 	{ID: "onezerominer", Name: "OneZeroMiner", Description: "Optimized AMD and NVIDIA multi-algorithm GPU miner.", Hardware: []string{"AMD", "NVIDIA"}, License: "Proprietary", Redistribution: "Downloaded directly from the official GitHub release for private use; review the vendor terms.", SourceURL: "https://github.com/OneZeroMiner/onezerominer/releases", BinaryName: "onezerominer", DefaultArguments: []string{"--pool", "{POOL}", "--wallet", "{WALLET}", "--worker", "{WORKER}", "--password", "{PASSWORD}"}, AlgorithmFlag: "--algo", PackageRequired: true, AutomaticInstall: true},
 	{ID: "qubminer", Name: "QubMiner", Description: "Legacy Qubic.li CPU and NVIDIA miner package.", Hardware: []string{"CPU", "NVIDIA"}, License: "GPL-3.0 repository", Redistribution: "The latest requested release is marked final and bundles external components. Manual review is required before installation.", SourceURL: "https://github.com/Worm/qubminer/releases", BinaryName: "qli-Client", DefaultArguments: []string{}, AlgorithmFlag: "", PackageRequired: true},
@@ -57,16 +60,30 @@ func catalogMinerDefinition(entry protocol.MinerCatalogEntry) protocol.MinerDefi
 	profile := ""
 	binaryName := ""
 	version := "package-required"
+	algorithm := "multi"
+	if entry.Version != "" {
+		version = entry.Version
+	}
+	if entry.Algorithm != "" {
+		algorithm = entry.Algorithm
+	}
 	if entry.ImageIncluded {
 		profile = entry.ID
-		version = "Ubuntu 24.04 package"
+		if entry.Version == "" {
+			version = "Ubuntu 24.04 package"
+		}
 	} else {
 		binaryName = entry.BinaryName
 	}
 	return protocol.MinerDefinition{
 		CatalogID: entry.ID, Name: entry.Name, Version: version, Profile: profile,
-		Algorithm: "multi", ManagedBinary: managed, BinaryName: binaryName,
-		SourceURL: entry.SourceURL, DefaultArguments: append([]string(nil), entry.DefaultArguments...),
+		Algorithm: algorithm, ManagedBinary: managed, BinaryName: binaryName,
+		SourceURL: entry.SourceURL, SourceCommit: entry.SourceCommit,
+		PackageFormat: entry.PackageFormat, EntryPoint: entry.EntryPoint,
+		Environment:      maps.Clone(entry.Environment),
+		StatsType:        entry.StatsType,
+		StatsURL:         entry.StatsURL,
+		DefaultArguments: append([]string(nil), entry.DefaultArguments...),
 	}
 }
 
@@ -119,6 +136,10 @@ func (s *Store) InstallCatalogMiner(catalogID string) (protocol.MinerDefinition,
 	}
 	for _, miner := range s.ListMiners() {
 		if catalogMinerMatches(entry, miner) {
+			if len(entry.Environment) > 0 && !maps.Equal(miner.Environment, entry.Environment) {
+				miner.Environment = maps.Clone(entry.Environment)
+				return s.SaveMiner(miner)
+			}
 			return miner, nil
 		}
 	}

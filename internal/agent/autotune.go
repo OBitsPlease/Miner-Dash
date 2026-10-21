@@ -32,6 +32,7 @@ type powerRange struct {
 	index   int
 	current int
 	minimum int
+	maximum int
 }
 
 type tuneMeasurement struct {
@@ -57,7 +58,7 @@ func (t *smartTuner) active() bool {
 	return t.status.Active
 }
 
-func (t *smartTuner) start(parent context.Context, command protocol.Command, miner *MinerManager, logger interface{ Printf(string, ...any) }, finish func(protocol.CommandResult)) error {
+func (t *smartTuner) start(parent context.Context, command protocol.Command, maxPowerW int, miner *MinerManager, logger interface{ Printf(string, ...any) }, finish func(protocol.CommandResult)) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.status.Active {
@@ -73,8 +74,11 @@ func (t *smartTuner) start(parent context.Context, command protocol.Command, min
 		Message: "Reading safe NVIDIA power ranges", StartedAt: time.Now().UTC(),
 	}
 	request := *command.SmartTune
+	if maxPowerW > 0 && (request.MaxPowerW == 0 || request.MaxPowerW > maxPowerW) {
+		request.MaxPowerW = maxPowerW
+	}
 	go func() {
-		result := runSmartTune(ctx, request, miner, t.update)
+		result := runSmartTune(ctx, request, maxPowerW, miner, t.update)
 		t.mu.Lock()
 		t.cancel = nil
 		t.status.Active = false
@@ -116,8 +120,8 @@ func (t *smartTuner) update(status protocol.SmartTuneStatus) {
 	t.status = status
 }
 
-func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, miner *MinerManager, update func(protocol.SmartTuneStatus)) protocol.CommandResult {
-	if request.Mode != "balanced" || request.MaxPowerW <= 0 || request.MaxPowerW > 115 ||
+func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, maxPowerW int, miner *MinerManager, update func(protocol.SmartTuneStatus)) protocol.CommandResult {
+	if request.Mode != "balanced" || request.MaxPowerW < 0 ||
 		request.MaxTemperatureC < 60 || request.MaxTemperatureC > 85 {
 		return protocol.CommandResult{Error: "unsafe smart tune request"}
 	}
@@ -128,11 +132,21 @@ func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, miner 
 	if len(ranges) == 0 {
 		return protocol.CommandResult{Error: "no NVIDIA GPUs were found"}
 	}
+	if err := smartTunePreflight(miner, ranges); err != nil {
+		return protocol.CommandResult{Error: err.Error()}
+	}
+	if maxPowerW > 0 && (request.MaxPowerW == 0 || request.MaxPowerW > maxPowerW) {
+		request.MaxPowerW = maxPowerW
+	}
 	original := make([]protocol.GPUOverclock, 0, len(ranges))
 	selected := make([]protocol.GPUOverclock, 0, len(ranges))
 	for _, gpu := range ranges {
-		limit := min(gpu.current, request.MaxPowerW)
-		original = append(original, protocol.GPUOverclock{Selector: strconv.Itoa(gpu.index), PowerLimitW: limit})
+		limit := smartTunePowerCeiling(gpu, request.MaxPowerW)
+		originalLimit := gpu.current
+		if maxPowerW > 0 {
+			originalLimit = min(originalLimit, maxPowerW)
+		}
+		original = append(original, protocol.GPUOverclock{Selector: strconv.Itoa(gpu.index), PowerLimitW: originalLimit})
 		if err := setNVIDIAPowerLimit(gpu.index, limit); err != nil {
 			restorePowerLimits(original)
 			return protocol.CommandResult{Error: err.Error()}
@@ -148,12 +162,12 @@ func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, miner 
 		if err := ctx.Err(); err != nil {
 			return protocol.CommandResult{Error: "smart tune canceled; original power limits restored"}
 		}
-		startLimit := min(gpu.current, request.MaxPowerW)
+		startLimit := smartTunePowerCeiling(gpu, request.MaxPowerW)
 		update(protocol.SmartTuneStatus{
 			Phase: "benchmarking", GPUIndex: gpu.index, CompletedGPUs: position, TotalGPUs: len(ranges),
 			Message: fmt.Sprintf("Benchmarking GPU %d at %d W", gpu.index, startLimit), SelectedSettings: selected,
 		})
-		baseline, err := measureGPU(ctx, miner, gpu.index, request.MaxPowerW, request.MaxTemperatureC, 0)
+		baseline, err := measureGPU(ctx, miner, gpu.index, startLimit, request.MaxTemperatureC, 0)
 		if err != nil {
 			return protocol.CommandResult{Error: fmt.Sprintf("GPU %d baseline failed: %v", gpu.index, err)}
 		}
@@ -166,7 +180,7 @@ func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, miner 
 				Phase: "testing", GPUIndex: gpu.index, CompletedGPUs: position, TotalGPUs: len(ranges),
 				Message: fmt.Sprintf("Testing GPU %d at %d W", gpu.index, candidate), SelectedSettings: selected,
 			})
-			measurement, err := measureGPU(ctx, miner, gpu.index, request.MaxPowerW, request.MaxTemperatureC, smartTuneSettleTime)
+			measurement, err := measureGPU(ctx, miner, gpu.index, startLimit, request.MaxTemperatureC, smartTuneSettleTime)
 			if err != nil {
 				return protocol.CommandResult{Error: fmt.Sprintf("GPU %d test failed: %v", gpu.index, err)}
 			}
@@ -182,9 +196,16 @@ func runSmartTune(ctx context.Context, request protocol.SmartTuneRequest, miner 
 	restoreOnFailure = false
 	sort.Slice(selected, func(i, j int) bool { return selected[i].Selector < selected[j].Selector })
 	return protocol.CommandResult{
-		Output:        fmt.Sprintf("Balanced smart tune completed for %d GPUs; all limits are at or below %d W", len(selected), request.MaxPowerW),
+		Output:        fmt.Sprintf("Balanced smart tune completed for %d GPUs within configured or hardware power limits", len(selected)),
 		TunedSettings: selected,
 	}
+}
+
+func smartTunePowerCeiling(gpu powerRange, requested int) int {
+	if requested == 0 {
+		return gpu.maximum
+	}
+	return min(gpu.maximum, requested)
 }
 
 func balancedTuneScore(measurement, baseline tuneMeasurement) float64 {
@@ -194,6 +215,45 @@ func balancedTuneScore(measurement, baseline tuneMeasurement) float64 {
 	hashRatio := measurement.hashrate / baseline.hashrate
 	efficiencyRatio := (measurement.hashrate / measurement.power) / (baseline.hashrate / baseline.power)
 	return hashRatio*0.6 + efficiencyRatio*0.4
+}
+
+func minerGPUHashrate(state protocol.MinerState, index int) float64 {
+	for _, device := range state.Devices {
+		if device.Index == index && strings.EqualFold(device.Kind, "GPU") {
+			return device.Hashrate
+		}
+	}
+	return 0
+}
+
+// smartTunePreflight verifies the telemetry Smart Tune depends on before any
+// power limit is changed, so a rig that cannot be measured is reported with an
+// actionable reason instead of being disturbed by a run that is certain to fail.
+func smartTunePreflight(miner *MinerManager, ranges []powerRange) error {
+	state := miner.State()
+	if !state.Running {
+		return errors.New("the miner must be running so Smart Tune can measure each GPU")
+	}
+	telemetry := nvidiaGPUs()
+	for _, gpu := range ranges {
+		var reading *protocol.GPU
+		for position := range telemetry {
+			if telemetry[position].Index == gpu.index {
+				reading = &telemetry[position]
+				break
+			}
+		}
+		if reading == nil {
+			return fmt.Errorf("nvidia-smi is not reporting telemetry for GPU %d; Smart Tune cannot measure power or temperature safely", gpu.index)
+		}
+		if reading.Power <= 0 {
+			return fmt.Errorf("GPU %d is not reporting power draw; Smart Tune needs power telemetry to stay within the configured limit", gpu.index)
+		}
+		if minerGPUHashrate(state, gpu.index) <= 0 {
+			return fmt.Errorf("the miner is not reporting a per-GPU hashrate for GPU %d; Smart Tune needs per-GPU hashrates to compare power levels", gpu.index)
+		}
+	}
+	return nil
 }
 
 func measureGPU(ctx context.Context, miner *MinerManager, index int, maxPower int, maxTemperature float64, settle time.Duration) (tuneMeasurement, error) {
@@ -209,13 +269,7 @@ func measureGPU(ctx context.Context, miner *MinerManager, index int, maxPower in
 		if !state.Running {
 			return tuneMeasurement{}, errors.New("miner stopped")
 		}
-		hashrate := 0.0
-		for _, device := range state.Devices {
-			if device.Index == index && strings.EqualFold(device.Kind, "GPU") {
-				hashrate = device.Hashrate
-				break
-			}
-		}
+		hashrate := minerGPUHashrate(state, index)
 		gpus := nvidiaGPUs()
 		var found bool
 		for _, gpu := range gpus {
@@ -234,8 +288,11 @@ func measureGPU(ctx context.Context, miner *MinerManager, index int, maxPower in
 			result.temperature += gpu.Temperature
 			break
 		}
-		if !found || hashrate <= 0 {
-			return tuneMeasurement{}, errors.New("GPU telemetry is unavailable")
+		if !found {
+			return tuneMeasurement{}, fmt.Errorf("GPU %d stopped reporting nvidia-smi telemetry during the measurement", index)
+		}
+		if hashrate <= 0 {
+			return tuneMeasurement{}, fmt.Errorf("the miner stopped reporting a per-GPU hashrate for GPU %d during the measurement", index)
 		}
 	}
 	result.hashrate /= smartTuneSampleCount
@@ -249,23 +306,26 @@ func readNVIDIAPowerRanges() ([]powerRange, error) {
 	if err != nil {
 		return nil, errors.New("nvidia-smi is required for smart tune")
 	}
-	output, err := exec.Command(path, "--query-gpu=index,power.limit,power.min_limit", "--format=csv,noheader,nounits").Output()
+	output, err := exec.Command(path, "--query-gpu=index,power.limit,power.min_limit,power.max_limit", "--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil, fmt.Errorf("read NVIDIA power limits: %w", err)
 	}
 	var result []powerRange
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		fields := strings.Split(line, ",")
-		if len(fields) != 3 {
+		if len(fields) != 4 {
 			return nil, errors.New("unexpected NVIDIA power limit output")
 		}
 		index, indexErr := strconv.Atoi(strings.TrimSpace(fields[0]))
 		current, currentErr := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
 		minimum, minimumErr := strconv.ParseFloat(strings.TrimSpace(fields[2]), 64)
-		if indexErr != nil || currentErr != nil || minimumErr != nil {
+		maximum, maximumErr := strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+		if indexErr != nil || currentErr != nil || minimumErr != nil || maximumErr != nil {
 			return nil, errors.New("invalid NVIDIA power limit output")
 		}
-		result = append(result, powerRange{index: index, current: int(current + 0.5), minimum: int(minimum + 0.5)})
+		result = append(result, powerRange{
+			index: index, current: int(current + 0.5), minimum: int(minimum + 0.5), maximum: int(maximum + 0.5),
+		})
 	}
 	return result, nil
 }

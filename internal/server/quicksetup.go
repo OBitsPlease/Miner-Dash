@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -79,6 +80,9 @@ func (s *Store) SaveQuickFlightSheet(input protocol.QuickFlightSheetInput) (prot
 		if !ok {
 			return protocol.QuickFlightSheetResult{}, errors.New("selected mining software is not in the catalog")
 		}
+		if err := validateCatalogMinerCoin(entry.ID, input.Coin); err != nil {
+			return protocol.QuickFlightSheetResult{}, err
+		}
 		supportsDevice := false
 		for _, hardware := range entry.Hardware {
 			if (input.DeviceType == "CPU" && hardware == "CPU") || (input.DeviceType == "GPU" && hardware != "CPU") {
@@ -103,6 +107,9 @@ func (s *Store) SaveQuickFlightSheet(input protocol.QuickFlightSheetInput) (prot
 		}
 	}
 	if entry, ok := catalogEntry(miner.CatalogID); ok {
+		if err := validateCatalogMinerCoin(miner.CatalogID, input.Coin); err != nil {
+			return protocol.QuickFlightSheetResult{}, err
+		}
 		supportsDevice := false
 		for _, hardware := range entry.Hardware {
 			if (input.DeviceType == "CPU" && hardware == "CPU") || (input.DeviceType == "GPU" && hardware != "CPU") {
@@ -112,6 +119,9 @@ func (s *Store) SaveQuickFlightSheet(input protocol.QuickFlightSheetInput) (prot
 		}
 		if !supportsDevice {
 			return protocol.QuickFlightSheetResult{}, errors.New("selected mining software does not support this workload type")
+		}
+		if entry.Algorithm != "" && !strings.EqualFold(input.Algorithm, entry.Algorithm) {
+			return protocol.QuickFlightSheetResult{}, fmt.Errorf("%s supports only %s", entry.Name, entry.Algorithm)
 		}
 		if hasSecondary && miner.CatalogID != "srbminer-multi" {
 			return protocol.QuickFlightSheetResult{}, errors.New("CPU and GPU dual workloads currently require SRBMiner-MULTI")

@@ -7,17 +7,31 @@ hash, and the finished USB contents. After installing Rig OS to an internal
 drive, **Restore USB for normal storage** erases the installer USB and creates
 one full-size exFAT partition.
 
-Dashboard-created media also receives a provisioning file on its EFI setup
+Dashboard-created media receives a provisioning file on its EFI setup
 partition. It contains the selected controller LAN URL, pinned TLS fingerprint,
-rig name, and a one-use enrollment credential. First boot consumes the file,
-enrolls automatically, and removes it. A failed enrollment is retried on a
-later boot while the credential remains valid.
+rig name, and a one-use enrollment credential. First boot locates the EFI
+partition on the boot disk, consumes the pairing file, enrolls automatically,
+and removes the file only after enrollment succeeds. A failed enrollment is
+retried on a later boot while the credential remains valid.
+
+For headless troubleshooting, the image enables SSH password login for the
+`user` account with initial password `1`; the same account is available on the
+remote terminal. The local tty1 login prompt is disabled so boot does not stop
+at an interactive console. Connect with `ssh user@RIG_IP` after the rig appears
+on the network. The account can run administrative diagnostics with `sudo`
+using the initial password. The image generates unique SSH host keys on first
+boot. Change the initial password with `passwd` after connecting; root SSH
+login is disabled.
 
 The builder creates a persistent, bootable raw disk from an operator-supplied
 official Ubuntu 24.04 cloud qcow2. It downloads only the explicitly pinned
 XMRig package through the image's signature-verifying Ubuntu APT configuration;
-it never downloads an agent or proprietary miner. Verify the Ubuntu digest
-against the release's signed `SHA256SUMS` before supplying it.
+it never downloads an agent or proprietary miner. The operator also stages the
+Ubuntu `linux-modules-extra` package matching the base kernel, including wired
+NIC drivers omitted from the cloud image, and `wireless-regdb`. Ethernet is
+required for `network-online.target`, so automatic enrollment waits for the
+wired DHCP connection. Verify the Ubuntu digest against the release's signed
+`SHA256SUMS` before supplying it.
 
 Install the build-host packages from `packages.txt` using Ubuntu's signed APT
 repositories. Build with an independently verified MinerDash agent:
@@ -31,9 +45,67 @@ sudo ./build-raw-usb-image.sh \
   --xmrig-version EXACT_NOBLE_APT_VERSION \
   --xmrig-debs-dir ./xmrig-debs \
   --xmrig-debs-manifest ./xmrig-debs/SHA256SUMS \
+  --network-debs-dir ./network-debs \
+  --network-debs-manifest ./network-debs/SHA256SUMS \
   --output ./minerdash-usb.raw \
   --size-gib 16
 ```
+
+The network bundle must contain exactly the `linux-modules-extra` package
+matching the base image's installed kernel release and `wireless-regdb`.
+Download those exact package versions through signed Ubuntu APT metadata, then
+record their SHA-256 digests in the network package manifest:
+
+```sh
+apt-get download \
+  linux-modules-extra-KERNEL_RELEASE=EXACT_KERNEL_PACKAGE_VERSION \
+  wireless-regdb=EXACT_WIRELESS_REGDB_VERSION
+cd ./network-debs && sha256sum *.deb > SHA256SUMS
+```
+
+The image builder verifies the package names, manifest hashes, kernel release,
+and presence of the Realtek `r8169` module before accepting the image.
+
+For a GPU rig, stage the signed Ubuntu NVIDIA driver dependency closure for
+the target image's installed package state. Include the selected driver
+metapackage, `ubuntu-drivers-common`, `nvidia-settings`, `nvidia-xconfig`,
+`xserver-xorg-core`, and all packages required to install them. The builder
+verifies every package hash, installs the bundle without network access, and
+requires the driver tools and kernel module to be present before it emits the
+image. NVIDIA images start a headless Xorg server on local-only display `:0`
+so the agent can apply per-GPU fan and clock settings without a monitor or
+desktop. CPU-only images do not install or start Xorg.
+
+On a matching Ubuntu 24.04 build host, extract the target base image's package
+status and download the chosen stable driver with its complete dependency
+closure from signed APT metadata:
+
+```sh
+guestfish --ro -a ubuntu-24.04-server-cloudimg-amd64.img -i \
+  cat /var/lib/dpkg/status > ./image-dpkg-status
+apt-get update
+mkdir -p ./nvidia-driver-debs
+apt-get -y --download-only --no-install-recommends \
+  -o Dir::State::status=./image-dpkg-status \
+  -o Dir::Cache::archives=./nvidia-driver-debs \
+  install ubuntu-drivers-common=EXACT_UBUNTU_DRIVERS_VERSION \
+  nvidia-driver-580=EXACT_NVIDIA_DRIVER_VERSION nvidia-settings \
+  nvidia-xconfig xserver-xorg-core
+cd ./nvidia-driver-debs && sha256sum *.deb > SHA256SUMS
+```
+
+Add these options to the builder invocation:
+
+```sh
+--nvidia-driver-package nvidia-driver-580 \
+--nvidia-driver-version EXACT_NVIDIA_DRIVER_VERSION \
+--nvidia-driver-debs-dir ./nvidia-driver-debs \
+--nvidia-driver-debs-manifest ./nvidia-driver-debs/SHA256SUMS
+```
+
+The driver series and exact package version are recorded in the build
+manifest. The image builder installs from this verified local bundle; no
+internet access is required in the Rig OS image or during its first boot.
 
 The selected size must fit the destination USB media. The root filesystem is
 expanded to that size and remains writable, so the rig runs persistently rather
@@ -78,38 +150,23 @@ Proprietary miners continue to use only this operator-supplied manifest flow.
 
 ## Identity and enrollment safety
 
-The image contains no enrollment token, agent identity, machine ID, SSH host
-key, wallet secret, or miner configuration. On first boot,
-`minerdash-first-boot.service` creates unique host identity, keeps the agent
-disabled, and requires explicit per-rig enrollment. Never enroll a master
-image. The physical console signs in to the locked, non-SSH `minerdash` setup
-account and opens a guided menu for USB operation, local-drive installation,
-network information, enrollment, reboot, and shutdown. Enroll without placing
-the shared token in shell history:
-
-```sh
-sudo minerdash-enroll-console
-```
-
-The account has passwordless sudo access only to the console enrollment and
-local-disk installation commands.
+The base image contains no enrollment token, agent identity, machine ID, SSH
+host key, wallet secret, or miner configuration. Dashboard-paired USB media
+boots directly into Rig OS; the first-boot service creates unique host
+identity and enrolls from the EFI pairing file without console input. It keeps
+the agent disabled if pairing data is missing or enrollment fails. Never
+distribute paired USB media as a master image; create a new paired USB for each
+rig.
 
 To clone a running USB installation onto a non-removable local disk, inspect
-`lsblk`, then use the deliberately destructive command:
-
-```sh
-sudo minerdash-install-to-disk \
-  --target /dev/SELECTED_DISK \
-  --confirm ERASE-/dev/SELECTED_DISK
-```
-
-The script refuses the running disk, removable disks, mounted targets, and
-undersized targets. Before copying, it stops the agent and freezes the running
-USB root filesystem; this prevents an inconsistent live block-level clone.
-It then copies the whole bootable disk and removes cloned MinerDash
-credentials, machine identity, and SSH host keys from the target. Shut down
-without returning to normal operation, remove the USB, and boot the local disk
-to create fresh identity and enroll it independently.
+open that rig's **Commands** tab in Miner Dash and use **Install Rig OS to an
+internal drive**. The dashboard lists only unmounted, non-removable disks and
+requires explicit erase confirmation. The script refuses the running disk,
+removable disks, mounted targets, and undersized targets. It stops the agent
+and freezes the running USB root filesystem before copying, transfers the
+existing rig identity to the internal disk, and disables that identity on the
+source USB. Keep the rig powered during cloning; after it completes, remove the
+USB and boot the internal drive. Pair the USB again before reusing it.
 
 Package the completed raw image for dashboard publication:
 

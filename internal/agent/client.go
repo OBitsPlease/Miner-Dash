@@ -27,20 +27,24 @@ import (
 )
 
 type Client struct {
-	config           Config
-	identity         Identity
-	http             *http.Client
-	miner            *MinerManager
-	metrics          MetricsCollector
-	logger           *log.Logger
-	appliedRevision  atomic.Uint64
-	configuration    protocol.ResolvedConfiguration
-	watchdogStopped  bool
-	lastFanPercent   map[string]int
-	lowHashSince     time.Time
-	watchdogFailures int
-	pendingResult    *pendingCommandResult
-	tuner            *smartTuner
+	config                 Config
+	identity               Identity
+	http                   *http.Client
+	miner                  *MinerManager
+	metrics                MetricsCollector
+	logger                 *log.Logger
+	appliedRevision        atomic.Uint64
+	configurationErr       string
+	configuration          protocol.ResolvedConfiguration
+	watchdogStopped        bool
+	lastFanPercent         map[string]int
+	lastPowerLimitEnforced time.Time
+	lowHashSince           time.Time
+	watchdogFailures       int
+	pendingResult          *pendingCommandResult
+	tuner                  *smartTuner
+	failover               epicFailoverState
+	cpuOptimizer           *cpuOptimizer
 }
 
 type pendingCommandResult struct {
@@ -71,7 +75,8 @@ func NewClient(config Config, logger *log.Logger) (*Client, error) {
 	return &Client{
 		config: config, http: &http.Client{Transport: transport, Timeout: 15 * time.Second},
 		miner: NewMinerManager(config.Profiles), logger: logger, lastFanPercent: make(map[string]int),
-		tuner: &smartTuner{},
+		tuner:        &smartTuner{},
+		cpuOptimizer: newCPUOptimizer(config.CPUOptimization),
 	}, nil
 }
 
@@ -90,12 +95,14 @@ func (c *Client) Run(ctx context.Context) error {
 	heartbeatTicker := time.NewTicker(10 * time.Second)
 	commandTicker := time.NewTicker(2 * time.Second)
 	configurationTicker := time.NewTicker(10 * time.Second)
+	failoverTicker := time.NewTicker(5 * time.Second)
 	updateTicker := time.NewTicker(6 * time.Hour)
 	defer heartbeatTicker.Stop()
 	defer commandTicker.Stop()
 	defer configurationTicker.Stop()
+	defer failoverTicker.Stop()
 	defer updateTicker.Stop()
-	if err := c.syncConfiguration(ctx); err != nil {
+	if err := c.syncAndRecordConfiguration(ctx); err != nil {
 		c.logger.Printf("initial configuration sync failed: %v", err)
 	}
 	if err := c.heartbeat(ctx); err != nil {
@@ -117,8 +124,12 @@ func (c *Client) Run(ctx context.Context) error {
 				c.logger.Printf("command poll failed: %v", err)
 			}
 		case <-configurationTicker.C:
-			if err := c.syncConfiguration(ctx); err != nil {
+			if err := c.syncAndRecordConfiguration(ctx); err != nil {
 				c.logger.Printf("configuration sync failed: %v", err)
+			}
+		case <-failoverTicker.C:
+			if err := c.reconcileEpicFailover(ctx); err != nil {
+				c.logger.Printf("Epic failover check failed: %v", err)
 			}
 		case <-updateTicker.C:
 			if err := c.checkAgentUpdate(ctx); err != nil {
@@ -182,11 +193,27 @@ func (c *Client) checkAgentUpdate(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	}
-	if err := exec.Command(installer, "activate", expected).Start(); err != nil {
+	if err := startDetachedAgentActivation(installer, expected); err != nil {
 		return fmt.Errorf("activate agent update: %w", err)
 	}
 	c.logger.Printf("verified agent update %s activated; restarting service", expected[:12])
 	return nil
+}
+
+// startDetachedAgentActivation runs the activation helper outside the agent's own
+// service scope when systemd-run is available. The helper restarts
+// minerdash-agent.service, which terminates every process in that unit's cgroup,
+// so running it as a direct child risks killing it mid-restart.
+func startDetachedAgentActivation(installer, digest string) error {
+	if path, err := exec.LookPath("systemd-run"); err == nil {
+		command := exec.Command(path, "--no-block", "--collect",
+			"--unit", "minerdash-agent-activate", "--description", "MinerDash agent activation",
+			installer, "activate", digest)
+		if err := command.Run(); err == nil {
+			return nil
+		}
+	}
+	return exec.Command(installer, "activate", digest).Start()
 }
 
 func (c *Client) downloadAgentRelease(ctx context.Context, releasePath, destination, expectedHash string) error {
@@ -240,6 +267,18 @@ func (c *Client) enroll(ctx context.Context) (Identity, error) {
 
 func (c *Client) heartbeat(ctx context.Context) error {
 	metrics := c.metrics.Collect(c.miner.State())
+	if c.configuration.GPUPowerLimitW > 0 && len(metrics.GPUs) > 0 &&
+		(time.Since(c.lastPowerLimitEnforced) >= 30*time.Second || c.lastPowerLimitEnforced.IsZero()) {
+		if err := enforceGPUPowerLimit(c.configuration.GPUPowerLimitW, metrics.GPUs); err != nil {
+			c.configurationErr = err.Error()
+			if stopErr := c.miner.Stop(); stopErr != nil {
+				c.configurationErr = fmt.Sprintf("%v; stop miner: %v", err, stopErr)
+			}
+			c.logger.Printf("GPU power policy enforcement failed: %v", err)
+		} else {
+			c.lastPowerLimitEnforced = time.Now()
+		}
+	}
 	if err := applyAutofan(c.configuration.Autofan, metrics.GPUs, c.lastFanPercent); err != nil {
 		c.logger.Printf("autofan failed: %v", err)
 	}
@@ -251,12 +290,25 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	metrics.SmartTuneSupported = true
 	metrics.DriverUpdateSupported = runtime.GOOS == "linux"
 	metrics.AppliedRevision = c.appliedRevision.Load()
+	metrics.ConfigurationError = c.configurationErr
+	c.applyMiningStatus(&metrics)
+	metrics.CPUOptimization = c.cpuOptimizer.update(metrics, c.miner.Logs())
 	request := protocol.HeartbeatRequest{Metrics: metrics}
 	err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+c.identity.AgentID+"/heartbeat", c.identity.Token, request, nil)
 	if errors.Is(err, errNoContent) {
 		return nil
 	}
 	return err
+}
+
+func (c *Client) syncAndRecordConfiguration(ctx context.Context) error {
+	err := c.syncConfiguration(ctx)
+	if err != nil {
+		c.configurationErr = err.Error()
+		return err
+	}
+	c.configurationErr = ""
+	return nil
 }
 
 func (c *Client) syncConfiguration(ctx context.Context) error {
@@ -268,16 +320,12 @@ func (c *Client) syncConfiguration(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if configuration.Revision <= c.appliedRevision.Load() {
+	if configuration.Revision <= c.appliedRevision.Load() &&
+		configuration.GPUPowerLimitW == c.configuration.GPUPowerLimitW {
 		return nil
 	}
 	if err := validateResolvedConfiguration(configuration); err != nil {
 		return err
-	}
-	if c.configuration.Overclock.ID != "" && configuration.Overclock.ID == "" {
-		if err := resetOverclock(c.configuration.Overclock); err != nil {
-			return fmt.Errorf("restore previous overclock: %w", err)
-		}
 	}
 	if c.configuration.Autofan.Enabled && !configuration.Autofan.Enabled {
 		if err := resetAutofan(); err != nil {
@@ -290,13 +338,50 @@ func (c *Client) syncConfiguration(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := applyOverclock(configuration.Overclock); err != nil {
+	var fallbackBinaryUpdate *minerBinaryUpdate
+	if configuration.Fallback != nil {
+		fallbackConfiguration := protocol.ResolvedConfiguration{Miner: configuration.Fallback.Miner}
+		fallbackBinaryUpdate, err = c.ensureManagedMiner(ctx, &fallbackConfiguration)
+		if err != nil {
+			if binaryUpdate != nil {
+				_ = binaryUpdate.rollback()
+			}
+			return fmt.Errorf("prepare fallback miner: %w", err)
+		}
+		configuration.Fallback.Miner = fallbackConfiguration.Miner
+	}
+	gpus := c.metrics.Collect(c.miner.State()).GPUs
+	if configuration.GPUPowerLimitW > 0 && len(gpus) > 0 {
+		if err := enforceGPUPowerLimit(configuration.GPUPowerLimitW, gpus); err != nil {
+			if stopErr := c.miner.Stop(); stopErr != nil {
+				return fmt.Errorf("enforce controller GPU power policy: %v; stop miner: %w", err, stopErr)
+			}
+			return fmt.Errorf("enforce controller GPU power policy: %w", err)
+		}
+		c.lastPowerLimitEnforced = time.Now()
+		configuration.Overclock = applyGPUPowerPolicyToProfile(configuration.Overclock, configuration.GPUPowerLimitW, gpus)
+	}
+	if err := transitionOverclock(c.configuration.Overclock, configuration.Overclock); err != nil {
+		if configuration.GPUPowerLimitW > 0 {
+			if enforceErr := enforceGPUPowerLimit(configuration.GPUPowerLimitW, gpus); enforceErr != nil {
+				if stopErr := c.miner.Stop(); stopErr != nil {
+					return fmt.Errorf("apply overclock: %v; enforce controller GPU power policy: %v; stop miner: %w", err, enforceErr, stopErr)
+				}
+				return fmt.Errorf("apply overclock: %v; enforce controller GPU power policy: %w", err, enforceErr)
+			}
+		}
 		if binaryUpdate != nil {
 			_ = binaryUpdate.rollback()
 		}
+		if fallbackBinaryUpdate != nil {
+			_ = fallbackBinaryUpdate.rollback()
+		}
 		return err
 	}
-	if err := c.miner.StartResolved(configuration, c.config.Name); err != nil {
+	if err := c.startResolvedWorkload(configuration); err != nil {
+		if fallbackBinaryUpdate != nil {
+			_ = fallbackBinaryUpdate.rollback()
+		}
 		if binaryUpdate == nil {
 			return err
 		}
@@ -309,7 +394,7 @@ func (c *Client) syncConfiguration(ctx context.Context) error {
 		if _, prepareErr := c.ensureManagedMiner(ctx, &previousConfiguration); prepareErr != nil {
 			return fmt.Errorf("start updated miner: %v; prepare restored miner: %w", err, prepareErr)
 		}
-		if restartErr := c.miner.StartResolved(previousConfiguration, c.config.Name); restartErr != nil {
+		if restartErr := c.startResolvedWorkload(previousConfiguration); restartErr != nil {
 			return fmt.Errorf("start updated miner: %v; restart previous miner: %w", err, restartErr)
 		}
 		return fmt.Errorf("updated miner failed to start and the previous miner was restored: %w", err)
@@ -319,10 +404,48 @@ func (c *Client) syncConfiguration(ctx context.Context) error {
 			c.logger.Printf("remove previous miner binary: %v", err)
 		}
 	}
+	if fallbackBinaryUpdate != nil {
+		if err := fallbackBinaryUpdate.commit(); err != nil {
+			c.logger.Printf("remove previous fallback miner binary: %v", err)
+		}
+	}
 	c.configuration = configuration
+	c.failover.reset()
 	c.watchdogStopped = false
 	c.appliedRevision.Store(configuration.Revision)
 	return nil
+}
+
+func (c *Client) startResolvedWorkload(configuration protocol.ResolvedConfiguration) error {
+	return c.startCPUWorkload(protocol.ResolvedWorkload{
+		Miner: configuration.Miner, Wallet: configuration.Wallet, Pool: configuration.Pool,
+		MiningUser: configuration.MiningUser, WorkerName: configuration.WorkerName,
+		Algorithm: configuration.Miner.Algorithm, Coin: configuration.Wallet.Coin,
+	}, c.config.Name, configuration.GPUPowerLimitW)
+}
+
+func (c *Client) startCPUWorkload(workload protocol.ResolvedWorkload, workerName string, gpuPowerLimitW int) error {
+	if gpuPowerLimitW > 0 {
+		gpus := c.metrics.Collect(c.miner.State()).GPUs
+		if len(gpus) > 0 {
+			if err := enforceGPUPowerLimit(gpuPowerLimitW, gpus); err != nil {
+				if stopErr := c.miner.Stop(); stopErr != nil {
+					return fmt.Errorf("enforce controller GPU power policy: %v; stop miner: %w", err, stopErr)
+				}
+				return fmt.Errorf("enforce controller GPU power policy: %w", err)
+			}
+			c.lastPowerLimitEnforced = time.Now()
+		}
+	}
+	if err := c.miner.Stop(); err != nil {
+		return err
+	}
+	if len(c.metrics.Collect(c.miner.State()).GPUs) == 0 {
+		if err := c.cpuOptimizer.prepare(workload.Algorithm); err != nil {
+			c.logger.Printf("prepare CPU optimization for %s: %v", workload.Algorithm, err)
+		}
+	}
+	return c.miner.StartWorkload(workload, workerName)
 }
 
 func (c *Client) ensureManagedMiner(ctx context.Context, configuration *protocol.ResolvedConfiguration) (*minerBinaryUpdate, error) {
@@ -401,9 +524,30 @@ func (c *Client) ensureManagedMiner(ctx context.Context, configuration *protocol
 		profile.StatsType = "srbminer"
 		profile.StatsURL = "http://127.0.0.1:21550/"
 	}
+	if strings.EqualFold(miner.BinaryName, "epic-miner-launch") && profile.StatsType == "" {
+		profile.StatsType = "epic"
+	}
+	if strings.EqualFold(miner.BinaryName, "t-rex") {
+		if profile.StatsType == "" {
+			profile.StatsType = "trex"
+			profile.StatsURL = "http://127.0.0.1:4067/summary"
+		}
+		profile.Args = ensureTRexAPIArguments(profile.Args)
+	}
 	c.miner.SetProfile(profileName, profile)
 	miner.Profile = profileName
 	return update, nil
+}
+
+// ensureTRexAPIArguments guarantees the T-Rex HTTP API is bound to loopback so
+// hashrate telemetry can be read, without overriding an explicit operator bind.
+func ensureTRexAPIArguments(args []string) []string {
+	for _, argument := range args {
+		if strings.HasPrefix(argument, "--api-bind-http") {
+			return args
+		}
+	}
+	return append(append([]string(nil), args...), "--api-bind-http", "127.0.0.1:4067")
 }
 
 func (c *Client) downloadMinerBundle(ctx context.Context, minerID, destination, entryPoint, packageHash, executableHash string) (*minerBinaryUpdate, error) {
@@ -682,12 +826,15 @@ func (c *Client) enforceWatchdog(metrics protocol.Metrics) error {
 		return nil
 	}
 	if !tooHot && c.watchdogStopped {
-		if err := c.miner.StartResolved(c.configuration, c.config.Name); err != nil {
+		if err := c.startActiveWorkload(); err != nil {
 			return err
 		}
 		c.watchdogStopped = false
 	}
-	if c.watchdogStopped || policy.MinHashrate <= 0 || !metrics.Miner.Running {
+	// Smart Tune deliberately lowers power limits and hashrate while it measures
+	// each GPU, so the minimum-hashrate watchdog must not restart the miner and
+	// invalidate the run that is in progress.
+	if c.watchdogStopped || policy.MinHashrate <= 0 || !metrics.Miner.Running || c.tuner.active() {
 		c.lowHashSince = time.Time{}
 		return nil
 	}
@@ -713,22 +860,20 @@ func (c *Client) enforceWatchdog(metrics protocol.Metrics) error {
 		_, err := executeSystemAction("reboot")
 		return err
 	}
-	return c.miner.StartResolved(c.configuration, c.config.Name)
+	return c.startActiveWorkload()
 }
 
 func validateResolvedConfiguration(configuration protocol.ResolvedConfiguration) error {
-	if configuration.Overclock.Vendor == "NVIDIA" {
-		for _, setting := range configuration.Overclock.Settings {
-			if setting.PowerLimitW > 115 {
-				return errors.New("NVIDIA power limits cannot exceed 115 W")
-			}
-		}
-	}
 	if configuration.Miner.Profile == "" {
 		return nil
 	}
 	if configuration.Pool.URL == "" || configuration.Wallet.Address == "" {
 		return errors.New("assigned miner requires a pool URL and wallet address")
+	}
+	if configuration.Fallback != nil &&
+		(configuration.Fallback.Miner.Profile == "" && !configuration.Fallback.Miner.ManagedBinary ||
+			configuration.Fallback.Pool.URL == "" || configuration.Fallback.Wallet.Address == "") {
+		return errors.New("fallback miner requires a profile, pool URL, and wallet address")
 	}
 	return nil
 }
@@ -749,7 +894,7 @@ func (c *Client) pollCommand(ctx context.Context) error {
 		return err
 	}
 	if command.Action == "smart-tune" {
-		err := c.tuner.start(ctx, command, c.miner, c.logger, func(result protocol.CommandResult) {
+		err := c.tuner.start(ctx, command, c.configuration.GPUPowerLimitW, c.miner, c.logger, func(result protocol.CommandResult) {
 			c.finishSmartTune(command.ID, result)
 		})
 		if err == nil {
@@ -762,10 +907,10 @@ func (c *Client) pollCommand(ctx context.Context) error {
 		if err := c.submitCommandResult(ctx, command.ID, protocol.CommandResult{Output: "system action accepted"}); err != nil {
 			return err
 		}
-		_, returnErr := c.executeCommand(command)
+		_, returnErr := c.executeCommand(ctx, command)
 		return returnErr
 	}
-	output, executeErr := c.executeCommand(command)
+	output, executeErr := c.executeCommand(ctx, command)
 	result := protocol.CommandResult{}
 	if executeErr != nil {
 		result.Error = executeErr.Error()
@@ -787,9 +932,19 @@ func (c *Client) submitCommandResult(ctx context.Context, commandID string, resu
 	return err
 }
 
-func (c *Client) executeCommand(command protocol.Command) (string, error) {
+func (c *Client) executeCommand(ctx context.Context, command protocol.Command) (string, error) {
 	switch command.Action {
-	case "start", "stop", "restart":
+	case "shell-command":
+		return executeShellCommand(command.ShellCommand)
+	case "start", "restart":
+		if err := c.syncAndRecordConfiguration(ctx); err != nil {
+			return "", fmt.Errorf("load assigned flight sheet: %w", err)
+		}
+		if err := c.startActiveWorkload(); err != nil {
+			return "", fmt.Errorf("start assigned miner: %w", err)
+		}
+		return "assigned flight-sheet miner started", nil
+	case "stop":
 		return "", c.miner.Execute(command.Action, command.Profile)
 	case "logs":
 		return c.miner.Logs(), nil
@@ -802,12 +957,20 @@ func (c *Client) executeCommand(command protocol.Command) (string, error) {
 		if command.DriverUpdate == nil {
 			return "", errors.New("GPU driver update settings are required")
 		}
+		if err := validateDriverSelection(*command.DriverUpdate); err != nil {
+			return "", err
+		}
 		if c.miner.State().Running {
 			if err := c.miner.Execute("stop", ""); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return "", fmt.Errorf("stop miner before driver update: %w", err)
 			}
 		}
 		return executeGPUDriverUpdate(*command.DriverUpdate)
+	case "gpu-driver-list":
+		if command.DriverUpdate == nil {
+			return "", errors.New("GPU driver vendor settings are required")
+		}
+		return listGPUDriverPackages(*command.DriverUpdate)
 	case "reboot", "shutdown":
 		return executeSystemAction(command.Action)
 	default:

@@ -87,6 +87,16 @@ func TestMarketProviderResolvesUnambiguousCoinLogos(t *testing.T) {
 	}
 }
 
+func TestEpicCashCoinMetadataHasLocalFallback(t *testing.T) {
+	definition, ok := coinDefinitions["EPIC"]
+	if !ok || definition.ID != "epic-cash" || definition.Name != "Epic Cash" || definition.Logo != "/coins/epic.svg" {
+		t.Fatalf("Epic coin metadata = %#v", definition)
+	}
+	if _, err := webFiles.ReadFile("web/coins/epic.svg"); err != nil {
+		t.Fatalf("Epic fallback logo: %v", err)
+	}
+}
+
 func TestPoolPerformanceWindowsAndWorkerAttribution(t *testing.T) {
 	now := time.Now().UTC()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

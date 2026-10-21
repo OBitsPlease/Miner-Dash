@@ -20,6 +20,8 @@ func applyAutofan(policy protocol.AutofanPolicy, gpus []protocol.GPU, previous m
 	if runtime.GOOS != "linux" {
 		return errors.New("autofan is supported only on Linux agents")
 	}
+	var nvidiaSettingsPath string
+	var nvidiaFans map[int][]int
 	for _, gpu := range gpus {
 		percent := desiredFanPercent(policy, gpu.Temperature)
 		key := fmt.Sprintf("%s:%d", gpu.Vendor, gpu.Index)
@@ -28,7 +30,22 @@ func applyAutofan(policy protocol.AutofanPolicy, gpus []protocol.GPU, previous m
 		}
 		switch gpu.Vendor {
 		case "NVIDIA":
-			if err := setNVIDIAFan(gpu.Index, percent); err != nil {
+			if nvidiaFans == nil {
+				var err error
+				nvidiaSettingsPath, err = exec.LookPath("nvidia-settings")
+				if err != nil {
+					return errors.New("nvidia-settings is required for NVIDIA autofan")
+				}
+				smiPath, err := exec.LookPath("nvidia-smi")
+				if err != nil {
+					return errors.New("nvidia-smi is required to map NVIDIA fans to GPUs")
+				}
+				nvidiaFans, err = nvidiaFansByGPU(smiPath, nvidiaSettingsPath)
+				if err != nil {
+					return err
+				}
+			}
+			if err := setNVIDIAFanTargets(nvidiaSettingsPath, gpu.Index, percent, nvidiaFans[gpu.Index]); err != nil {
 				return err
 			}
 		case "AMD":
@@ -81,18 +98,85 @@ func desiredFanPercent(policy protocol.AutofanPolicy, temperature float64) int {
 }
 
 func setNVIDIAFan(index, percent int) error {
-	path, err := exec.LookPath("nvidia-settings")
+	settingsPath, err := exec.LookPath("nvidia-settings")
 	if err != nil {
 		return errors.New("nvidia-settings is required for NVIDIA autofan")
 	}
-	arguments := []string{
-		"-a", fmt.Sprintf("[gpu:%d]/GPUFanControlState=1", index),
-		"-a", fmt.Sprintf("[fan:%d]/GPUTargetFanSpeed=%d", index, percent),
+	smiPath, err := exec.LookPath("nvidia-smi")
+	if err != nil {
+		return errors.New("nvidia-smi is required to map NVIDIA fans to GPUs")
 	}
-	if output, err := exec.Command(path, arguments...).CombinedOutput(); err != nil {
+	fansByGPU, err := nvidiaFansByGPU(smiPath, settingsPath)
+	if err != nil {
+		return err
+	}
+	return setNVIDIAFanTargets(settingsPath, index, percent, fansByGPU[index])
+}
+
+func setNVIDIAFanTargets(settingsPath string, index, percent int, fans []int) error {
+	if len(fans) == 0 {
+		return fmt.Errorf("NVIDIA GPU %d has no mapped fans", index)
+	}
+	arguments := []string{"-a", fmt.Sprintf("[gpu:%d]/GPUFanControlState=1", index)}
+	for _, fan := range fans {
+		arguments = append(arguments, "-a", fmt.Sprintf("[fan:%d]/GPUTargetFanSpeed=%d", fan, percent))
+	}
+	if output, err := exec.Command(settingsPath, arguments...).CombinedOutput(); err != nil {
 		return fmt.Errorf("set NVIDIA fan: %s: %w", strings.TrimSpace(string(output)), err)
 	}
+	for _, fan := range fans {
+		output, err := exec.Command(settingsPath, "-t", "-q", fmt.Sprintf("[fan:%d]/GPUTargetFanSpeed", fan)).Output()
+		if err != nil {
+			return fmt.Errorf("read back NVIDIA fan %d target: %w", fan, err)
+		}
+		actual, err := strconv.Atoi(strings.TrimSpace(string(output)))
+		if err != nil {
+			return fmt.Errorf("parse NVIDIA fan %d target %q: %w", fan, strings.TrimSpace(string(output)), err)
+		}
+		if actual != percent {
+			return fmt.Errorf("NVIDIA fan %d target is %d%% after requesting %d%%", fan, actual, percent)
+		}
+	}
 	return nil
+}
+
+func nvidiaFansByGPU(smiPath, settingsPath string) (map[int][]int, error) {
+	gpuIndices, err := selectedNVIDIAIndices(smiPath, "*")
+	if err != nil {
+		return nil, err
+	}
+	output, err := exec.Command(settingsPath, "-q", "fans", "--terse").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list NVIDIA fans: %w", err)
+	}
+	fanCount := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.EqualFold(fields[1], "fans") {
+			continue
+		}
+		fanCount, err = strconv.Atoi(fields[0])
+		if err != nil {
+			return nil, fmt.Errorf("parse NVIDIA fan count %q: %w", fields[0], err)
+		}
+		break
+	}
+	return mapNVIDIAFansToGPUs(gpuIndices, fanCount)
+}
+
+func mapNVIDIAFansToGPUs(gpuIndices []int, fanCount int) (map[int][]int, error) {
+	if len(gpuIndices) == 0 || fanCount == 0 {
+		return nil, fmt.Errorf("no NVIDIA fan targets found for %d GPUs", len(gpuIndices))
+	}
+	allFans := make([]int, fanCount)
+	for fan := range allFans {
+		allFans[fan] = fan
+	}
+	fansByGPU := make(map[int][]int, len(gpuIndices))
+	for _, gpuIndex := range gpuIndices {
+		fansByGPU[gpuIndex] = append([]int(nil), allFans...)
+	}
+	return fansByGPU, nil
 }
 
 func resetNVIDIAFans(indices []int) error {

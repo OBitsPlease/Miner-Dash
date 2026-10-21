@@ -41,7 +41,11 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/minerdash /opt/minerdash/agent /opt/minerdash/miners /sys/class/drm
+DeviceAllow=char-cpu/msr rw
+DeviceAllow=char-nvidia rw
+DeviceAllow=char-nvidia-modeset rw
+DeviceAllow=char-nvidia-uvm rw
+ReadWritePaths=/var/lib/minerdash /opt/minerdash/agent /opt/minerdash/miners /sys/class/drm /sys/devices/system/cpu
 
 [Install]
 WantedBy=multi-user.target

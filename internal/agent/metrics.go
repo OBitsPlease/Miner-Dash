@@ -30,6 +30,9 @@ func (c *MetricsCollector) Collect(miner protocol.MinerState) protocol.Metrics {
 	metrics.MemoryTotal, metrics.MemoryUsed = memory()
 	metrics.GPUs = append(metrics.GPUs, nvidiaGPUs()...)
 	metrics.GPUs = append(metrics.GPUs, amdGPUs()...)
+	if len(metrics.GPUs) == 0 {
+		metrics.GPUs = append(metrics.GPUs, intelGPUs()...)
+	}
 	return metrics
 }
 
@@ -113,7 +116,7 @@ func memory() (total, used uint64) {
 }
 
 func nvidiaGPUs() []protocol.GPU {
-	command := exec.Command("nvidia-smi", "--query-gpu=index,name,uuid,pci.bus_id,driver_version,vbios_version,temperature.gpu,power.draw,fan.speed,utilization.gpu,memory.used,memory.total,clocks.current.graphics,clocks.current.memory", "--format=csv,noheader,nounits")
+	command := exec.Command("nvidia-smi", "--query-gpu=index,name,uuid,pci.bus_id,driver_version,vbios_version,temperature.gpu,power.draw,power.limit,fan.speed,utilization.gpu,memory.used,memory.total,clocks.current.graphics,clocks.current.memory", "--format=csv,noheader,nounits")
 	output, err := command.Output()
 	if err != nil {
 		return nil
@@ -128,19 +131,19 @@ func parseNVIDIAGPUs(output []byte) []protocol.GPU {
 	}
 	result := make([]protocol.GPU, 0, len(rows))
 	for _, row := range rows {
-		if len(row) != 14 {
+		if len(row) != 15 {
 			continue
 		}
 		index, _ := strconv.Atoi(strings.TrimSpace(row[0]))
-		memoryUsedMiB, _ := strconv.ParseUint(strings.TrimSpace(row[10]), 10, 64)
-		memoryTotalMiB, _ := strconv.ParseUint(strings.TrimSpace(row[11]), 10, 64)
+		memoryUsedMiB, _ := strconv.ParseUint(strings.TrimSpace(row[11]), 10, 64)
+		memoryTotalMiB, _ := strconv.ParseUint(strings.TrimSpace(row[12]), 10, 64)
 		result = append(result, protocol.GPU{
 			Index: index, Vendor: "NVIDIA", Name: strings.TrimSpace(row[1]),
 			UUID: strings.TrimSpace(row[2]), PCIAddress: strings.TrimSpace(row[3]),
 			Driver: strings.TrimSpace(row[4]), Firmware: strings.TrimSpace(row[5]),
-			Temperature: parseFloat(row[6]), Power: parseFloat(row[7]), Fan: parseFloat(row[8]),
-			Utilization: parseFloat(row[9]), MemoryUsed: memoryUsedMiB * 1024 * 1024,
-			MemoryTotal: memoryTotalMiB * 1024 * 1024, CoreClock: parseFloat(row[12]), MemoryClock: parseFloat(row[13]),
+			Temperature: parseFloat(row[6]), Power: parseFloat(row[7]), PowerLimit: parseFloat(row[8]), Fan: parseFloat(row[9]),
+			Utilization: parseFloat(row[10]), MemoryUsed: memoryUsedMiB * 1024 * 1024,
+			MemoryTotal: memoryTotalMiB * 1024 * 1024, CoreClock: parseFloat(row[13]), MemoryClock: parseFloat(row[14]),
 		})
 	}
 	return result
@@ -179,6 +182,7 @@ func amdGPUsAt(root, driverVersion string) []protocol.GPU {
 		if len(hwmons) > 0 {
 			gpu.Temperature = readFloat(filepath.Join(hwmons[0], "temp1_input")) / 1000
 			gpu.Power = readFloat(filepath.Join(hwmons[0], "power1_average")) / 1_000_000
+			gpu.PowerLimit = readFloat(filepath.Join(hwmons[0], "power1_cap")) / 1_000_000
 		}
 		result = append(result, gpu)
 	}
@@ -191,6 +195,59 @@ func amdDriverVersion() string {
 	}
 	if version := commandOutput("modinfo", "-F", "version", "amdgpu"); version != "" {
 		return version
+	}
+	if kernel := commandOutput("uname", "-r"); kernel != "" {
+		return "kernel " + kernel
+	}
+	return ""
+}
+
+func intelGPUs() []protocol.GPU {
+	return intelGPUsAt("/sys/class/drm", intelDriverVersion())
+}
+
+func intelGPUsAt(root, driverVersion string) []protocol.GPU {
+	cards, _ := filepath.Glob(filepath.Join(root, "card[0-9]*", "device"))
+	var result []protocol.GPU
+	for _, device := range cards {
+		vendor, err := os.ReadFile(filepath.Join(device, "vendor"))
+		if err != nil || strings.TrimSpace(string(vendor)) != "0x8086" {
+			continue
+		}
+		indexText := strings.TrimPrefix(filepath.Base(filepath.Dir(device)), "card")
+		index, _ := strconv.Atoi(indexText)
+		name := readTrimmed(filepath.Join(device, "product_name"))
+		if name == "" {
+			name = "Intel GPU " + readTrimmed(filepath.Join(device, "device"))
+		}
+		gpu := protocol.GPU{
+			Index:       index,
+			Vendor:      "INTEL",
+			Name:        strings.TrimSpace(name),
+			Driver:      driverVersion,
+			PCIAddress:  pciAddress(device),
+			Firmware:    firstNonEmpty(readTrimmed(filepath.Join(device, "firmware_version")), readTrimmed(filepath.Join(device, "guc_info"))),
+			Utilization: readFloat(filepath.Join(device, "gpu_busy_percent")),
+		}
+		hwmons, _ := filepath.Glob(filepath.Join(device, "hwmon", "hwmon*"))
+		if len(hwmons) > 0 {
+			gpu.Temperature = readFloat(filepath.Join(hwmons[0], "temp1_input")) / 1000
+			gpu.Power = readFloat(filepath.Join(hwmons[0], "power1_average")) / 1_000_000
+			gpu.PowerLimit = readFloat(filepath.Join(hwmons[0], "power1_cap")) / 1_000_000
+		}
+		result = append(result, gpu)
+	}
+	return result
+}
+
+func intelDriverVersion() string {
+	for _, module := range []string{"xe", "i915"} {
+		if version := readTrimmed(filepath.Join("/sys/module", module, "version")); version != "" {
+			return version
+		}
+		if version := commandOutput("modinfo", "-F", "version", module); version != "" {
+			return version
+		}
 	}
 	if kernel := commandOutput("uname", "-r"); kernel != "" {
 		return "kernel " + kernel

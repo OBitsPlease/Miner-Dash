@@ -2,9 +2,11 @@ package server
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,12 +20,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ulikunitz/xz"
 	"minerdash/internal/protocol"
 )
 
 type catalogReleaseSource struct {
 	Repository   string
 	LinuxArchive *regexp.Regexp
+}
+
+type catalogPackageSeed struct {
+	archive       []byte
+	packageSHA256 string
+}
+
+//go:embed builtin_packages/epic-miner-2.3.3-linux-amd64.tar.gz
+var epicMinerPackage []byte
+
+//go:embed builtin_packages/epic-miner-launch
+var epicMinerLauncher []byte
+
+var catalogPackageSeeds = map[string]catalogPackageSeed{
+	"epic-miner": {
+		archive:       epicMinerPackage,
+		packageSHA256: "8abb5712a985fca571cbe0780b8f7554dbac6ac1d1f5eb0c9bcdcd75e50ce2e0",
+	},
 }
 
 var catalogReleaseSources = map[string]catalogReleaseSource{
@@ -46,25 +67,37 @@ var catalogReleaseSources = map[string]catalogReleaseSource{
 	"xmrig": {
 		Repository: "xmrig/xmrig",
 	},
+	"veil-miner-cpu": {
+		Repository:   "ohcee/Veil-Miner-CPU",
+		LinuxArchive: regexp.MustCompile(`(?i)^xmrig-.*-veil-.*-linux-x64\.tar\.gz$`),
+	},
+	"veil-miner-gpu": {
+		Repository:   "Veil-Project/Veil-Miner",
+		LinuxArchive: regexp.MustCompile(`(?i)^veilminer-v.*-linux-x64-cuda.*\.tar\.gz$`),
+	},
 	"lolminer": {
 		Repository:   "Lolliedieb/lolMiner-releases",
 		LinuxArchive: regexp.MustCompile(`(?i)^lolMiner_v.*_Lin64\.tar\.gz$`),
 	},
 	"teamredminer": {
-		Repository: "todxx/teamredminer",
+		Repository:   "todxx/teamredminer",
+		LinuxArchive: regexp.MustCompile(`(?i)^teamredminer-v.*-linux\.tgz$`),
 	},
 	"bzminer": {
 		Repository:   "bzminer/bzminer",
 		LinuxArchive: regexp.MustCompile(`(?i)^bzminer_v.*_linux\.tar\.gz$`),
 	},
 	"gminer": {
-		Repository: "develsoftware/GMinerRelease",
+		Repository:   "develsoftware/GMinerRelease",
+		LinuxArchive: regexp.MustCompile(`(?i)^gminer_.*_linux64\.tar\.xz$`),
 	},
 	"trex": {
-		Repository: "trexminer/T-Rex",
+		Repository:   "trexminer/T-Rex",
+		LinuxArchive: regexp.MustCompile(`(?i)^t-rex-.*-linux\.tar\.gz$`),
 	},
 	"ethminer": {
-		Repository: "ethereum-mining/ethminer",
+		Repository:   "ethereum-mining/ethminer",
+		LinuxArchive: regexp.MustCompile(`(?i)^ethminer-.*-linux-x86_64\.tar\.gz$`),
 	},
 	"hellminer": {
 		Repository: "vrscms/hellminer",
@@ -81,6 +114,22 @@ var catalogReleaseSources = map[string]catalogReleaseSource{
 	},
 }
 
+func (s *Store) RefreshInstalledEmbeddedMinerPackages(ctx context.Context) error {
+	installed := make(map[string]bool)
+	for _, miner := range s.ListMiners() {
+		installed[miner.CatalogID] = true
+	}
+	for catalogID := range catalogPackageSeeds {
+		if !installed[catalogID] {
+			continue
+		}
+		if _, err := s.EnsureCatalogMinerPackage(ctx, catalogID, false); err != nil {
+			return fmt.Errorf("refresh embedded miner %s: %w", catalogID, err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) EnsureCatalogMinerPackage(ctx context.Context, catalogID string, checkLatest bool) (protocol.MinerDefinition, error) {
 	entry, found := catalogEntry(catalogID)
 	if !found {
@@ -92,6 +141,23 @@ func (s *Store) EnsureCatalogMinerPackage(ctx context.Context, catalogID string,
 	}
 	if entry.ImageIncluded || !entry.PackageRequired {
 		return miner, nil
+	}
+	if seed, seeded := catalogPackageSeeds[catalogID]; seeded {
+		if strings.EqualFold(miner.PackageSHA256, seed.packageSHA256) && miner.BinarySHA256 != "" {
+			packagePath := filepath.Join(s.packageDir, miner.ID+".tar.gz")
+			packageHash, hashErr := packageFileSHA256(packagePath)
+			if hashErr == nil && strings.EqualFold(packageHash, seed.packageSHA256) {
+				entryHash, validateErr := validateMinerBundle(packagePath, miner.EntryPoint)
+				if validateErr == nil && strings.EqualFold(entryHash, miner.BinarySHA256) {
+					return miner, nil
+				}
+			}
+		}
+		saved, err := s.saveMinerBundle(miner.ID, bytes.NewReader(seed.archive), seed.packageSHA256, "")
+		if err != nil {
+			return protocol.MinerDefinition{}, fmt.Errorf("install embedded %s package: %w", entry.Name, err)
+		}
+		return saved, nil
 	}
 	if miner.BinarySHA256 != "" && !checkLatest {
 		return miner, nil
@@ -194,24 +260,25 @@ func downloadLatestCatalogExecutable(ctx context.Context, client *http.Client, s
 	if strings.TrimSpace(release.TagName) == "" || archiveURL == "" {
 		return "", errors.New("latest official release has no supported Linux archive")
 	}
-	if strings.TrimSpace(archiveDigest) == "" {
-		return "", errors.New("latest official Linux archive does not publish a SHA-256 digest")
-	}
 	parsed, err := url.Parse(archiveURL)
 	if err != nil || parsed.Scheme != "https" || !allowedReleaseHost(parsed.Hostname()) {
 		return "", errors.New("official release API returned an unapproved download URL")
 	}
-	if err := downloadTarGzipExecutableWithDigest(ctx, client, archiveURL, archiveDigest, binaryName, destination); err != nil {
+	if err := downloadCatalogArchiveExecutableWithDigest(ctx, client, archiveURL, archiveDigest, binaryName, destination); err != nil {
 		return "", err
 	}
 	return strings.TrimPrefix(release.TagName, "v"), nil
 }
 
 func downloadTarGzipExecutable(ctx context.Context, client *http.Client, archiveURL, binaryName, destination string) error {
-	return downloadTarGzipExecutableWithDigest(ctx, client, archiveURL, "", binaryName, destination)
+	return downloadCatalogArchiveExecutableWithDigest(ctx, client, archiveURL, "", binaryName, destination)
 }
 
 func downloadTarGzipExecutableWithDigest(ctx context.Context, client *http.Client, archiveURL, expectedDigest, binaryName, destination string) error {
+	return downloadCatalogArchiveExecutableWithDigest(ctx, client, archiveURL, expectedDigest, binaryName, destination)
+}
+
+func downloadCatalogArchiveExecutableWithDigest(ctx context.Context, client *http.Client, archiveURL, expectedDigest, binaryName, destination string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
 	if err != nil {
 		return err
@@ -226,21 +293,37 @@ func downloadTarGzipExecutableWithDigest(ctx context.Context, client *http.Clien
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return fmt.Errorf("official release download returned %s: %s", response.Status, strings.TrimSpace(string(message)))
 	}
-	hash := sha256.New()
-	compressed := io.TeeReader(io.LimitReader(response.Body, maxMinerBinarySize+1), hash)
-	gzipReader, err := gzip.NewReader(compressed)
-	if err != nil {
-		return fmt.Errorf("open official release archive: %w", err)
+	if response.ContentLength > maxMinerPackageSize {
+		return errors.New("official release archive exceeds 1 GiB")
 	}
-	defer gzipReader.Close()
-	if err := extractTarExecutable(gzipReader, binaryName, destination); err != nil {
+	hash := sha256.New()
+	compressed := io.TeeReader(io.LimitReader(response.Body, maxMinerPackageSize+1), hash)
+	var archiveReader io.Reader
+	var closeArchive func() error
+	if strings.HasSuffix(strings.ToLower(archiveURL), ".xz") {
+		xzReader, xzErr := xz.NewReader(compressed)
+		if xzErr != nil {
+			return fmt.Errorf("open official release archive: %w", xzErr)
+		}
+		archiveReader = xzReader
+		closeArchive = func() error { return nil }
+	} else {
+		gzipReader, gzipErr := gzip.NewReader(compressed)
+		if gzipErr != nil {
+			return fmt.Errorf("open official release archive: %w", gzipErr)
+		}
+		archiveReader = gzipReader
+		closeArchive = gzipReader.Close
+	}
+	defer closeArchive()
+	if err := extractTarExecutable(archiveReader, binaryName, destination); err != nil {
 		return err
 	}
+	if _, err := io.Copy(io.Discard, archiveReader); err != nil {
+		_ = os.Remove(destination)
+		return fmt.Errorf("finish official release archive: %w", err)
+	}
 	if expectedDigest != "" {
-		if _, err := io.Copy(io.Discard, gzipReader); err != nil {
-			_ = os.Remove(destination)
-			return fmt.Errorf("finish official release checksum: %w", err)
-		}
 		expected := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(expectedDigest)), "sha256:")
 		actual := hex.EncodeToString(hash.Sum(nil))
 		if len(expected) != 64 || !isHex(expected) || actual != expected {

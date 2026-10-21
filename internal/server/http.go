@@ -36,6 +36,8 @@ type HTTPServer struct {
 	community  *communityMinerRegistry
 	appUpdates *applicationUpdateMonitor
 	usb        *usbManager
+	discover   *discoverProvider
+	scanner    *networkScanner
 	sessions   map[string]session
 	downloads  map[string]time.Time
 	recovery   map[string]recoveryAttempt
@@ -57,6 +59,7 @@ func NewHTTPServer(store *Store, logger *log.Logger) http.Handler {
 		store: store, logger: logger,
 		market: newMarketProvider(), poolStats: newPoolStatsProvider(), releases: newCatalogReleaseMonitor(), community: newCommunityMinerRegistry(), appUpdates: appUpdates,
 		usb:      newUSBManager(filepath.Dir(store.path), appUpdates, store),
+		discover: newDiscoverProvider(filepath.Dir(store.path)), scanner: newNetworkScanner(),
 		sessions: make(map[string]session), downloads: make(map[string]time.Time), recovery: make(map[string]recoveryAttempt),
 	}
 	mux := http.NewServeMux()
@@ -122,6 +125,8 @@ func NewHTTPServer(store *Store, logger *log.Logger) http.Handler {
 	mux.HandleFunc("POST /api/v1/overclock-profiles", s.operatorAuth(s.saveOverclockProfile))
 	mux.HandleFunc("PUT /api/v1/overclock-profiles/{id}", s.operatorAuth(s.saveOverclockProfile))
 	mux.HandleFunc("DELETE /api/v1/overclock-profiles/{id}", s.operatorAuth(s.deleteResource("overclock-profiles")))
+	mux.HandleFunc("GET /api/v1/gpu-power-policy", s.readAuth(s.getGPUPowerPolicy))
+	mux.HandleFunc("PUT /api/v1/gpu-power-policy", s.operatorAuth(s.setGPUPowerPolicy))
 	mux.HandleFunc("GET /api/v1/activity", s.readAuth(s.listActivities))
 	mux.HandleFunc("GET /api/v1/alerts", s.readAuth(s.listAlerts))
 	mux.HandleFunc("GET /api/v1/schedules", s.readAuth(s.listSchedules))
@@ -135,6 +140,19 @@ func NewHTTPServer(store *Store, logger *log.Logger) http.Handler {
 	mux.HandleFunc("GET /api/v1/recovery-code", s.adminAuth(s.recoveryCode))
 	mux.HandleFunc("GET /api/v1/enrollment-token", s.adminAuth(s.enrollmentToken))
 	mux.HandleFunc("GET /api/v1/system-update", s.readAuth(s.applicationUpdateStatus))
+	mux.HandleFunc("GET /api/v1/discover/pow-prices", s.readAuth(s.discoverPOWPrices))
+	mux.HandleFunc("GET /api/v1/discover/new-listings", s.readAuth(s.discoverNewListings))
+	mux.HandleFunc("GET /api/v1/discover/events", s.readAuth(s.discoverEvents))
+	mux.HandleFunc("GET /api/v1/discover/calc-coins", s.readAuth(s.discoverCalcCoins))
+	mux.HandleFunc("POST /api/v1/discover/calc-profitability", s.readAuth(s.discoverCalcProfitability))
+	mux.HandleFunc("GET /api/v1/discover/calc-hardware", s.readAuth(s.discoverCalcHardware))
+	mux.HandleFunc("GET /api/v1/discover/calc-algorithms", s.readAuth(s.discoverCalcAlgorithms))
+	mux.HandleFunc("GET /api/v1/discover/calc-benchmarks", s.readAuth(s.discoverCalcBenchmarks))
+	mux.HandleFunc("GET /api/v1/flight-sheet-algorithms", s.readAuth(s.flightSheetAlgorithms))
+	mux.HandleFunc("GET /api/v1/discover/networks", s.readAuth(s.discoverNetworks))
+	mux.HandleFunc("GET /api/v1/discover/scan", s.readAuth(s.discoverScanStatus))
+	mux.HandleFunc("POST /api/v1/discover/scan", s.operatorAuth(s.discoverStartScan))
+	mux.HandleFunc("POST /api/v1/discover/scan/stop", s.operatorAuth(s.discoverStopScan))
 	mux.HandleFunc("POST /api/v1/system-update", s.adminAuth(s.installApplicationUpdate))
 	webRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -420,6 +438,22 @@ func (s *HTTPServer) saveOverclockProfile(w http.ResponseWriter, r *http.Request
 	value.ID = requestResourceID(r, value.ID)
 	saved, err := s.store.SaveOverclockProfile(value)
 	writeSaved(w, saved, err, r.Method)
+}
+
+func (s *HTTPServer) getGPUPowerPolicy(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.GPUPowerPolicy())
+}
+
+func (s *HTTPServer) setGPUPowerPolicy(w http.ResponseWriter, r *http.Request) {
+	var policy protocol.GPUPowerPolicy
+	if !decodeJSON(w, r, &policy) {
+		return
+	}
+	if err := s.store.SetGPUPowerPolicy(policy); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.store.GPUPowerPolicy())
 }
 
 func (s *HTTPServer) listActivities(w http.ResponseWriter, _ *http.Request) {

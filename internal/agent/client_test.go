@@ -62,6 +62,7 @@ func TestEnsureManagedMinerEnablesSRBMinerStatisticsAPI(t *testing.T) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(filepath.Join(directory, binaryName), binary, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +81,35 @@ func TestEnsureManagedMinerEnablesSRBMinerStatisticsAPI(t *testing.T) {
 	profile := client.miner.profiles["managed-"+minerID]
 	if profile.StatsType != "srbminer" || profile.StatsURL != "http://127.0.0.1:21550/" {
 		t.Fatalf("SRBMiner statistics profile = %#v", profile)
+	}
+}
+
+func TestEnsureManagedEpicMinerEnablesLogStatistics(t *testing.T) {
+	packageDir := t.TempDir()
+	minerID := "epic-miner"
+	binaryName := "epic-miner-launch"
+	binary := []byte("test executable")
+	digest := sha256.Sum256(binary)
+	directory := filepath.Join(packageDir, minerID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, binaryName), binary, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{
+		config: Config{PackageDir: packageDir},
+		miner:  NewMinerManager(map[string]Profile{}),
+	}
+	configuration := protocol.ResolvedConfiguration{Miner: protocol.MinerDefinition{
+		ID: minerID, ManagedBinary: true, BinaryName: binaryName,
+		BinarySHA256: hex.EncodeToString(digest[:]),
+	}}
+	if _, err := client.ensureManagedMiner(context.Background(), &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if profile := client.miner.profiles["managed-"+minerID]; profile.StatsType != "epic" {
+		t.Fatalf("Epic statistics profile = %#v", profile)
 	}
 }
 

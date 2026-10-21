@@ -1,0 +1,21 @@
+[Unit]
+Description=NVIDIA compute device initialization
+After=systemd-modules-load.service
+Before=minerdash-agent.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+ConditionPathExists=/usr/bin/nvidia-smi
+ConditionPathExists=/usr/bin/nvidia-modprobe
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/nvidia-modprobe -u -c=0
+ExecStart=/usr/bin/nvidia-smi -pm 1
+ExecStart=/usr/local/sbin/minerdash-nvidia-xorg-config
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -6,12 +6,12 @@ on:
       version:
         description: Version without the v prefix
         required: true
-        default: 1.0.2
+        default: 1.0.3
         type: string
       rig_os_release_tag:
         description: Release tag containing the verified Rig OS artifacts
         required: true
-        default: v1.0.2
+        default: v1.0.3
         type: string
       publish_to_release:
         description: Upload the installer to the matching vX.Y.Z release
@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ inputs.version }}' -notmatch '^\d+\.\d+\.\d+$') {
-            throw 'Version must look like 1.0.2 and must not include the v prefix.'
+            throw 'Version must look like 1.0.3 and must not include the v prefix.'
           }
           if ('${{ inputs.rig_os_release_tag }}' -notmatch '^v[0-9A-Za-z._+-]+$') {
             throw 'Rig OS release tag is invalid.'

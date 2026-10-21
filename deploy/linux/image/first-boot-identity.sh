@@ -4,17 +4,23 @@ IFS=$'\n\t'
 umask 077
 
 marker=/etc/minerdash/image-first-boot
-provisioning=/boot/efi/minerdash-provision.conf
-[[ -e "$marker" || -f "$provisioning" ]] || exit 0
+provisioning_name=minerdash-provision.conf
+provisioning=
+identity=/var/lib/minerdash/identity.json
+
+if [[ ! -e "$marker" && -s "$identity" ]]; then
+  exit 0
+fi
 
 if [[ -e "$marker" ]]; then
   # Images and disk clones must never share an agent credential or host identity.
   echo "MinerDash first boot: disabling the unconfigured agent"
   rm -f -- /etc/systemd/system/multi-user.target.wants/minerdash-agent.service
-  rm -f -- /etc/minerdash/agent.json /var/lib/minerdash/identity.json
+  rm -f -- /etc/minerdash/agent.json "$identity"
   rm -f -- /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_ecdsa_key.pub
   rm -f -- /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub
   rm -f -- /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_rsa_key.pub
+  ssh-keygen -A
 
   if [[ ! -s /etc/machine-id ]]; then
     echo "MinerDash first boot: creating machine identity"
@@ -33,10 +39,36 @@ if [[ -e "$marker" ]]; then
   fi
 
   echo "MinerDash first boot: completing identity setup"
-  rm -f -- "$marker"
 fi
 
-if [[ -f "$provisioning" && ! -L "$provisioning" ]]; then
+root_source=$(findmnt -nro SOURCE /)
+[[ -b "$root_source" ]] || {
+  echo "MinerDash first boot: cannot identify the boot disk for USB provisioning" >&2
+  exit 1
+}
+boot_disk=$(readlink -f -- "$root_source")
+while [[ $(lsblk -dnro TYPE "$boot_disk") != disk ]]; do
+  parent=$(lsblk -dnro PKNAME "$boot_disk")
+  [[ -n "$parent" ]] || {
+    echo "MinerDash first boot: cannot resolve the boot disk for USB provisioning" >&2
+    exit 1
+  }
+  boot_disk="/dev/$parent"
+done
+boot_disk=$(readlink -f -- "$boot_disk")
+efi_partition=$(lsblk -nrpo NAME,PARTTYPE "$boot_disk" |
+  awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {print $1; exit}')
+if [[ -n "$efi_partition" ]]; then
+  efi_mount=$(findmnt -nr -S "$efi_partition" -o TARGET || true)
+  if [[ -z "$efi_mount" ]]; then
+    efi_mount=/run/minerdash-efi
+    install -d -m 0700 "$efi_mount"
+    mount "$efi_partition" "$efi_mount"
+  fi
+  provisioning="$efi_mount/$provisioning_name"
+fi
+
+if [[ -n "$provisioning" && -f "$provisioning" && ! -L "$provisioning" ]]; then
   version= controller= fingerprint= name= token=
   while IFS='=' read -r key value; do
     value=${value%$'\r'}
@@ -76,7 +108,9 @@ if [[ -f "$provisioning" && ! -L "$provisioning" ]]; then
     --name "$name" \
     --token-file "$token_file"
   rm -f -- "$provisioning"
+  rm -f -- "$marker"
   echo "Automatic MinerDash enrollment complete."
 else
-  echo "Unique host identity created. Use the console menu to enroll this rig."
+  echo "MinerDash first boot: no USB pairing information found; the agent remains disabled." >&2
+  exit 1
 fi

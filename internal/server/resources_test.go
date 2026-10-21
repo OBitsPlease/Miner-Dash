@@ -2,12 +2,32 @@ package server
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"minerdash/internal/protocol"
 )
+
+func TestValidateFlightSheetMinerReadyAllowsAutomaticTReX(t *testing.T) {
+	err := validateFlightSheetMinerReady(protocol.MinerDefinition{
+		ID: "trex", CatalogID: "trex", Name: "T-Rex", Version: "package-required", ManagedBinary: true, BinaryName: "t-rex",
+	})
+	if err != nil {
+		t.Fatalf("automatic T-Rex should be installable, got %v", err)
+	}
+}
+
+func TestValidateFlightSheetMinerReadyExplainsMissingManualPackage(t *testing.T) {
+	err := validateFlightSheetMinerReady(protocol.MinerDefinition{
+		ID: "manual", CatalogID: "manual", Name: "Manual Miner", Version: "package-required", ManagedBinary: true, BinaryName: "manual",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Manual Miner is not installed") ||
+		!strings.Contains(err.Error(), "Choose an installed miner") {
+		t.Fatalf("expected actionable package error, got %v", err)
+	}
+}
 
 func TestResourceAssignmentResolutionAndAlerts(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
@@ -101,6 +121,51 @@ func TestResourceAssignmentResolutionAndAlerts(t *testing.T) {
 	}
 }
 
+func TestResolvedWorkerConfigurationEnforcesControllerGPUPowerPolicy(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.Enroll("gpu-rig", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := store.SaveOverclockProfile(protocol.OverclockProfile{
+		Name: "high power", Vendor: "NVIDIA",
+		Settings: []protocol.GPUOverclock{{Selector: "0", PowerLimitW: 180}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{OverclockProfileID: profile.ID}); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.state.Rigs[identity.AgentID].Metrics.GPUs = []protocol.GPU{
+		{Index: 0, Vendor: "NVIDIA"},
+		{Index: 1, Vendor: "NVIDIA"},
+	}
+	store.mu.Unlock()
+	if err := store.SetGPUPowerPolicy(protocol.GPUPowerPolicy{MaxPowerW: 115}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.GPUPowerLimitW != 115 {
+		t.Fatalf("resolved cap = %d W, want 115 W", resolved.GPUPowerLimitW)
+	}
+	want := []protocol.GPUOverclock{
+		{Selector: "*", PowerLimitW: 115},
+		{Selector: "0", PowerLimitW: 115},
+	}
+	if !reflect.DeepEqual(resolved.Overclock.Settings, want) {
+		t.Fatalf("resolved overclock settings = %#v, want %#v", resolved.Overclock.Settings, want)
+	}
+}
+
 func TestSaveFarmElectricityRate(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
 	if err != nil {
@@ -170,6 +235,79 @@ func TestFlightSheetRequiresExistingReferences(t *testing.T) {
 	}
 }
 
+func TestEpicFlightSheetResolvesCPUFallback(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.Enroll("cpu-rig", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	epicWallet, _ := store.SaveWallet(protocol.Wallet{Name: "Epic", Coin: "EPIC", Address: "solo"})
+	epicPool, _ := store.SavePool(protocol.Pool{Name: "Epic Stratum", URL: "stratum+tcp://192.0.2.79:3416"})
+	epicMiner, err := store.InstallCatalogMiner("epic-miner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qrlWallet, _ := store.SaveWallet(protocol.Wallet{Name: "QRL", Coin: "QRL", Address: "Q010203"})
+	qrlPool, _ := store.SavePool(protocol.Pool{Name: "QRL Pool", URL: "stratum+tcp://pool.invalid:3333"})
+	qrlMiner, _ := store.SaveMiner(protocol.MinerDefinition{Name: "QRL Miner", Profile: "qrl", Algorithm: "qrandomx"})
+	fallback, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "QRL fallback", DeviceType: "CPU", Coin: "QRL", Algorithm: "qrandomx",
+		WalletID: qrlWallet.ID, PoolID: qrlPool.ID, MinerID: qrlMiner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "Epic primary", DeviceType: "CPU", Coin: "EPIC", Algorithm: "randomx",
+		WalletID: epicWallet.ID, PoolID: epicPool.ID, MinerID: epicMiner.ID,
+		FallbackFlightSheetID: fallback.ID, FailoverAfterSeconds: 10, ReturnAfterSeconds: 15,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{FlightSheetID: primary.ID}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Fallback == nil || resolved.Fallback.Coin != "QRL" ||
+		resolved.Fallback.Miner.Profile != "qrl" || resolved.Fallback.Pool.URL != qrlPool.URL {
+		t.Fatalf("resolved fallback = %#v", resolved.Fallback)
+	}
+	if resolved.FailoverAfterSeconds != 10 || resolved.ReturnAfterSeconds != 15 {
+		t.Fatalf("resolved failover delays = %d/%d", resolved.FailoverAfterSeconds, resolved.ReturnAfterSeconds)
+	}
+}
+
+func TestFlightSheetRejectsInvalidFallback(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet, _ := store.SaveWallet(protocol.Wallet{Name: "Wallet", Coin: "TEST", Address: "address"})
+	pool, _ := store.SavePool(protocol.Pool{Name: "Pool", URL: "stratum+tcp://pool.invalid:3333"})
+	miner, _ := store.SaveMiner(protocol.MinerDefinition{Name: "Miner", Profile: "miner", Algorithm: "test"})
+	fallback, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "Fallback", DeviceType: "CPU", Coin: "TEST", Algorithm: "test",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: miner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "Unsupported primary", DeviceType: "CPU", Coin: "TEST", Algorithm: "test",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: miner.ID, FallbackFlightSheetID: fallback.ID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Epic CPU Miner") {
+		t.Fatalf("invalid fallback error = %v", err)
+	}
+}
+
 func TestFlightSheetDetailedConfigurationResolvesOverrides(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
 	if err != nil {
@@ -225,6 +363,109 @@ func TestFlightSheetDetailedConfigurationResolvesOverrides(t *testing.T) {
 	}
 }
 
+func TestTReXVeilFlightSheetUsesVeilProtocolAlgorithm(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	identity, err := store.Enroll("veil-rig", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet, err := store.SaveWallet(protocol.Wallet{Name: "VEIL", Coin: "VEIL", Address: "veil-wallet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := store.SavePool(protocol.Pool{Name: "VEIL Pool", URL: "stratum+tcp://veil.invalid:3334", Password: "solo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	miner, err := store.SaveMiner(protocol.MinerDefinition{
+		CatalogID: "trex", Name: "T-Rex", Algorithm: "multi", Profile: "trex",
+		DefaultArguments: []string{"-o", "{POOL}", "-u", "{WALLET}.{WORKER}", "-p", "{PASSWORD}"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "VEIL", DeviceType: "GPU", Coin: "VEIL", Algorithm: "progpow",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: miner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheet.Algorithm != "progpow-veil" {
+		t.Fatalf("saved VEIL algorithm = %q", sheet.Algorithm)
+	}
+	if _, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "Invalid VEIL", DeviceType: "GPU", Coin: "VEIL", Algorithm: "kawpow",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: miner.ID,
+	}); err == nil || !strings.Contains(err.Error(), "requires algorithm progpow-veil") {
+		t.Fatalf("invalid T-Rex VEIL algorithm error = %v", err)
+	}
+	if _, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{FlightSheetID: sheet.ID}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Miner.Algorithm != "progpow-veil" {
+		t.Fatalf("resolved VEIL algorithm = %q", resolved.Miner.Algorithm)
+	}
+	if got := strings.Join(resolved.Miner.ExtraArguments, " "); got != "-a progpow-veil" {
+		t.Fatalf("resolved T-Rex arguments = %q", got)
+	}
+}
+
+func TestVeilCPUFlightSheetRequiresVeilMiner(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := store.Enroll("veil-cpu-rig", "enroll")
+	wallet, _ := store.SaveWallet(protocol.Wallet{Name: "VEIL", Coin: "VEIL", Address: "bv-wallet"})
+	pool, _ := store.SavePool(protocol.Pool{Name: "VEIL RandomX", URL: "stratum+tcp://veil.invalid:3335", Password: "x"})
+	stock, _ := store.InstallCatalogMiner("xmrig")
+	if _, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "Invalid VEIL CPU", DeviceType: "CPU", Coin: "VEIL", Algorithm: "rx/veil",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: stock.ID,
+	}); err == nil || !strings.Contains(err.Error(), "Veil CPU Miner") {
+		t.Fatalf("stock XMRig VEIL error = %v", err)
+	}
+
+	veilMiner, _ := store.InstallCatalogMiner("veil-miner-cpu")
+	veilMiner.BinarySHA256 = strings.Repeat("a", 64)
+	veilMiner, err = store.SaveMiner(veilMiner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "VEIL CPU", DeviceType: "CPU", Coin: "VEIL", Algorithm: "RandomX",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: veilMiner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheet.Algorithm != "rx/veil" {
+		t.Fatalf("saved VEIL CPU algorithm = %q", sheet.Algorithm)
+	}
+	if _, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{FlightSheetID: sheet.ID}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Miner.CatalogID != "veil-miner-cpu" || resolved.Miner.StatsType != "xmrig" {
+		t.Fatalf("resolved VEIL CPU miner = %#v", resolved.Miner)
+	}
+	if got := strings.Join(resolved.Miner.ExtraArguments, " "); got != "-a rx/veil" {
+		t.Fatalf("resolved VEIL CPU arguments = %q", got)
+	}
+}
+
 func TestSRBFlightSheetUsesDetailedWalletTemplate(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
 	if err != nil {
@@ -257,6 +498,49 @@ func TestSRBFlightSheetUsesDetailedWalletTemplate(t *testing.T) {
 	}
 	if got := strings.Join(resolved.Miner.DefaultArguments, " "); !strings.Contains(got, "--wallet {WALLET}") {
 		t.Fatalf("resolved SRB arguments = %q", got)
+	}
+}
+
+func TestMiniZFlightSheetFormatsEquihashParameters(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.Enroll("rig-miniz", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet, err := store.SaveWallet(protocol.Wallet{Name: "YEC", Coin: "YEC", Address: "wallet-address"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := store.SavePool(protocol.Pool{Name: "YEC pool", URL: "stratum+tcp://pool.invalid:3053"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	miner, err := store.SaveMiner(protocol.MinerDefinition{
+		CatalogID: "miniz", Name: "miniZ", Algorithm: "equihash192_7",
+		ManagedBinary: true, BinaryName: "miniZ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := store.SaveFlightSheet(protocol.FlightSheet{
+		Name: "YEC solo", DeviceType: "GPU", Coin: "YEC", Algorithm: "192.7",
+		WalletID: wallet.ID, PoolID: pool.ID, MinerID: miner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{FlightSheetID: sheet.ID}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Miner.ExtraArguments; !reflect.DeepEqual(got, []string{"--par", "192,7"}) {
+		t.Fatalf("miniZ arguments = %#v, want --par 192,7", got)
 	}
 }
 
@@ -313,6 +597,73 @@ func TestFarmAssignmentDoesNotRestartMinerForDisabledPolicyDefaults(t *testing.T
 	}
 	if rig.Desired.Watchdog != (protocol.WatchdogPolicy{}) || rig.Desired.Autofan != (protocol.AutofanPolicy{}) {
 		t.Fatalf("disabled policies were not normalized: watchdog=%#v autofan=%#v", rig.Desired.Watchdog, rig.Desired.Autofan)
+	}
+}
+
+func TestGPUAdjustmentProfilePersistsEveryControlAndBumpsAssignedWorker(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.Enroll("GPU-Rig", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := store.SaveOverclockProfile(protocol.OverclockProfile{
+		Name: "GPU-Rig GPU tuning", Vendor: "NVIDIA",
+		Settings: []protocol.GPUOverclock{{
+			Selector: "0", PowerLimitW: 110, FanPercent: 70,
+			CoreOffsetMHz: -75, MemoryOffsetMHz: 125,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig, err := store.AssignWorker(identity.AgentID, protocol.WorkerAssignment{
+		OverclockProfileID: profile.ID,
+		EstimatedPowerW:    825,
+		PowerOffsetW:       35,
+		Watchdog: protocol.WatchdogPolicy{
+			Enabled: true, MaxTemperatureC: 78, MinHashrate: 100,
+			RestartAfterSeconds: 30, RebootAfterFailures: 4,
+		},
+		Autofan: protocol.AutofanPolicy{
+			Enabled: true, TargetTemperatureC: 65,
+			MinimumFanPercent: 35, MaximumFanPercent: 90,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.ResolvedWorkerConfiguration(identity.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rig.Desired.Revision != 1 || resolved.Overclock.ID != profile.ID ||
+		!reflect.DeepEqual(resolved.Overclock.Settings, profile.Settings) {
+		t.Fatalf("resolved GPU settings = %#v; rig revision = %d", resolved.Overclock, rig.Desired.Revision)
+	}
+	if rig.Desired.EstimatedPowerW != 825 || rig.Desired.PowerOffsetW != 35 ||
+		resolved.Watchdog.RestartAfterSeconds != 30 || resolved.Autofan.MaximumFanPercent != 90 {
+		t.Fatalf("worker adjustment fields were not preserved: rig=%#v resolved=%#v", rig.Desired, resolved)
+	}
+}
+
+func TestGPUAdjustmentProfileRejectsConflictingClockModes(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "state.json"), "admin", "enroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []protocol.GPUOverclock{
+		{Selector: "0", CoreClockMHz: 1410, CoreOffsetMHz: 50},
+		{Selector: "0", MemoryClockMHz: 5001, MemoryOffsetMHz: 100},
+	}
+	for _, setting := range tests {
+		if _, err := store.SaveOverclockProfile(protocol.OverclockProfile{
+			Name: "conflict", Vendor: "NVIDIA", Settings: []protocol.GPUOverclock{setting},
+		}); err == nil {
+			t.Fatalf("SaveOverclockProfile accepted conflicting settings: %#v", setting)
+		}
 	}
 }
 

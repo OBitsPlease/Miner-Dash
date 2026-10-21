@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,8 +149,8 @@ func (s *Store) SaveMiner(value protocol.MinerDefinition) (protocol.MinerDefinit
 			return value, fmt.Errorf("invalid environment variable name %q", name)
 		}
 	}
-	if value.StatsType != "" && value.StatsType != "xmrig" && value.StatsType != "miniz" && value.StatsType != "srbminer" {
-		return value, errors.New("stats_type must be empty, xmrig, miniz, or srbminer")
+	if value.StatsType != "" && value.StatsType != "xmrig" && value.StatsType != "miniz" && value.StatsType != "srbminer" && value.StatsType != "trex" {
+		return value, errors.New("stats_type must be empty, xmrig, miniz, srbminer, or trex")
 	}
 	if value.StatsType != "" {
 		parsed, err := url.Parse(value.StatsURL)
@@ -226,9 +227,48 @@ func (s *Store) SaveFlightSheet(value protocol.FlightSheet) (protocol.FlightShee
 	defer s.mu.Unlock()
 	wallet, walletOK := s.state.Wallets[value.WalletID]
 	_, poolOK := s.state.Pools[value.PoolID]
-	_, minerOK := s.state.Miners[value.MinerID]
+	miner, minerOK := s.state.Miners[value.MinerID]
 	if !walletOK || !poolOK || !minerOK {
 		return value, errors.New("wallet, pool, and miner must exist")
+	}
+	if err := validateFlightSheetMinerReady(miner); err != nil {
+		return value, err
+	}
+	if err := validateCatalogMinerCoin(miner.CatalogID, value.Coin); err != nil {
+		return value, err
+	}
+	value.Algorithm = catalogAlgorithmForCoin(miner.CatalogID, value.Coin, value.Algorithm)
+	if miner.CatalogID == "trex" && strings.EqualFold(strings.TrimSpace(value.Coin), "VEIL") &&
+		!strings.EqualFold(strings.TrimSpace(value.Algorithm), "progpow-veil") {
+		return value, errors.New("T-Rex mining VEIL requires algorithm progpow-veil; generic progpow uses an incompatible pool login protocol")
+	}
+	if err := validateBundledMinerAlgorithm(miner.CatalogID, value.Algorithm); err != nil {
+		return value, err
+	}
+	if entry, ok := catalogEntry(miner.CatalogID); ok && entry.Algorithm != "" && value.Algorithm != "" && !strings.EqualFold(value.Algorithm, entry.Algorithm) {
+		return value, fmt.Errorf("%s supports only %s", entry.Name, entry.Algorithm)
+	}
+	if value.FailoverAfterSeconds < 0 || value.FailoverAfterSeconds > 600 ||
+		value.ReturnAfterSeconds < 0 || value.ReturnAfterSeconds > 600 {
+		return value, errors.New("failover and return delays must be between 0 and 600 seconds")
+	}
+	if value.FallbackFlightSheetID != "" {
+		fallback, ok := s.state.FlightSheets[value.FallbackFlightSheetID]
+		if !ok {
+			return value, errors.New("fallback flight sheet does not exist")
+		}
+		if value.ID != "" && fallback.ID == value.ID {
+			return value, errors.New("a flight sheet cannot fall back to itself")
+		}
+		if miner.CatalogID != "epic-miner" {
+			return value, errors.New("automatic algorithm failover currently requires Epic CPU Miner as the primary miner")
+		}
+		if !strings.EqualFold(value.DeviceType, fallback.DeviceType) {
+			return value, errors.New("primary and fallback flight sheets must use the same device type")
+		}
+		if fallback.FallbackFlightSheetID != "" {
+			return value, errors.New("fallback flight sheets cannot contain another fallback")
+		}
 	}
 	hasSecondary := value.SecondaryDeviceType != "" || value.SecondaryCoin != "" || value.SecondaryAlgorithm != "" || value.SecondaryWalletID != "" || value.SecondaryPoolID != ""
 	if hasSecondary {
@@ -302,8 +342,17 @@ func (s *Store) SaveOverclockProfile(value protocol.OverclockProfile) (protocol.
 		if setting.FanPercent < 0 || setting.FanPercent > 100 || setting.PowerLimitW < 0 {
 			return value, errors.New("fan percent must be 0-100 and power limit cannot be negative")
 		}
-		if value.Vendor == "NVIDIA" && setting.PowerLimitW > 115 {
-			return value, errors.New("NVIDIA power limits cannot exceed 115 W")
+		if setting.CoreClockMHz > 0 && setting.CoreOffsetMHz != 0 {
+			return value, errors.New("locked core clock and core offset cannot be used together")
+		}
+		if setting.MemoryClockMHz > 0 && setting.MemoryOffsetMHz != 0 {
+			return value, errors.New("locked memory clock and memory offset cannot be used together")
+		}
+		if setting.Selector != "*" {
+			index, err := strconv.Atoi(setting.Selector)
+			if err != nil || index < 0 {
+				return value, errors.New("GPU selector must be * or a non-negative index")
+			}
 		}
 	}
 	s.mu.Lock()
@@ -421,59 +470,196 @@ func (s *Store) ResolvedWorkerConfiguration(rigID string) (protocol.ResolvedConf
 	if !ok {
 		return protocol.ResolvedConfiguration{}, ErrNotFound
 	}
-	result := protocol.ResolvedConfiguration{Revision: rig.Desired.Revision, Watchdog: rig.Desired.Watchdog, Autofan: rig.Desired.Autofan}
+	result := protocol.ResolvedConfiguration{
+		Revision: rig.Desired.Revision, GPUPowerLimitW: s.state.GPUPowerPolicy.MaxPowerW,
+		Watchdog: rig.Desired.Watchdog, Autofan: rig.Desired.Autofan,
+	}
 	if rig.Desired.FlightSheetID != "" {
 		sheet, ok := s.state.FlightSheets[rig.Desired.FlightSheetID]
 		if !ok {
 			return result, errors.New("assigned flight sheet no longer exists")
 		}
-		result.Miner = s.state.Miners[sheet.MinerID]
-		result.Wallet = s.state.Wallets[sheet.WalletID]
-		result.Pool = s.state.Pools[sheet.PoolID]
-		if sheet.PoolURLOverride != "" {
-			result.Pool.URL = sheet.PoolURLOverride
+		workload := s.resolveWorkloadLocked(rig, sheet)
+		if err := validateFlightSheetMinerReady(workload.Miner); err != nil {
+			return result, fmt.Errorf("flight sheet %q cannot start: %w", sheet.Name, err)
 		}
-		if sheet.PoolPasswordOverride != "" {
-			result.Pool.Password = sheet.PoolPasswordOverride
+		if err := validateBundledMinerAlgorithm(workload.Miner.CatalogID, workload.Miner.Algorithm); err != nil {
+			return result, fmt.Errorf("flight sheet %q cannot start: %w", sheet.Name, err)
 		}
-		if result.Miner.CatalogID == "srbminer-multi" {
-			if sheet.SecondaryCoin == "" {
-				result.Miner.DefaultArguments = srbSingleWorkloadArguments(sheet.DeviceType, sheet.Algorithm, result.Pool, result.Wallet, sheet.WalletTemplate)
-			} else {
-				secondaryWallet := s.state.Wallets[sheet.SecondaryWalletID]
-				secondaryPool := s.state.Pools[sheet.SecondaryPoolID]
-				result.Miner.DefaultArguments = append(
-					srbWorkloadArguments(sheet.DeviceType, sheet.Algorithm, result.Pool, result.Wallet, sheet.WalletTemplate),
-					srbWorkloadArguments(sheet.SecondaryDeviceType, sheet.SecondaryAlgorithm, secondaryPool, secondaryWallet, "")...,
-				)
+		result.Miner = workload.Miner
+		result.Wallet = workload.Wallet
+		result.Pool = workload.Pool
+		result.MiningUser = workload.MiningUser
+		result.WorkerName = workload.WorkerName
+		if sheet.FallbackFlightSheetID != "" {
+			fallback, ok := s.state.FlightSheets[sheet.FallbackFlightSheetID]
+			if !ok {
+				return result, errors.New("assigned fallback flight sheet no longer exists")
 			}
-			result.Miner.DefaultArguments = append(result.Miner.DefaultArguments,
-				"--api-enable", "--api-port", "21550", "--api-rig-name", "{WORKER}",
-			)
-			result.Miner.ExtraArguments = nil
-		} else if sheet.Algorithm != "" {
-			result.Miner.Algorithm = sheet.Algorithm
-			if entry, ok := catalogEntry(result.Miner.CatalogID); ok && entry.AlgorithmFlag != "" {
-				result.Miner.ExtraArguments = append(append([]string(nil), result.Miner.ExtraArguments...), entry.AlgorithmFlag, sheet.Algorithm)
-			}
+			resolvedFallback := s.resolveWorkloadLocked(rig, fallback)
+			result.Fallback = &resolvedFallback
+			result.FailoverAfterSeconds = sheet.FailoverAfterSeconds
+			result.ReturnAfterSeconds = sheet.ReturnAfterSeconds
 		}
-		result.WorkerName = sheet.WorkerName
-		if sheet.WalletTemplate != "" {
-			workerName := sheet.WorkerName
-			if workerName == "" {
-				workerName = rig.Rig.Name
-			}
-			result.MiningUser = renderWalletTemplate(sheet.WalletTemplate, result.Wallet.Address, workerName)
-			for index, argument := range result.Miner.DefaultArguments {
-				result.Miner.DefaultArguments[index] = strings.ReplaceAll(argument, "{WALLET}.{WORKER}", "{WALLET}")
-			}
-		}
-		result.Miner.ExtraArguments = append(result.Miner.ExtraArguments, sheet.ExtraArguments...)
 	}
 	if rig.Desired.OverclockProfileID != "" {
 		result.Overclock = s.state.OverclockProfiles[rig.Desired.OverclockProfileID]
 	}
+	result.Overclock = applyGPUPowerPolicyToProfile(result.Overclock, result.GPUPowerLimitW, rig.Metrics.GPUs)
 	return result, nil
+}
+
+func validateFlightSheetMinerReady(miner protocol.MinerDefinition) error {
+	if !miner.ManagedBinary || miner.Profile != "" || !strings.EqualFold(strings.TrimSpace(miner.Version), "package-required") {
+		return nil
+	}
+	if entry, ok := catalogEntry(miner.CatalogID); ok && entry.AutomaticInstall {
+		return nil
+	}
+	name := strings.TrimSpace(miner.Name)
+	if name == "" {
+		name = "Selected miner"
+	}
+	return fmt.Errorf("%s is not installed: its Linux package metadata and SHA-256 are missing. Choose an installed miner, or install/import its Linux package before applying this flight sheet", name)
+}
+
+func (s *Store) GPUPowerPolicy() protocol.GPUPowerPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.GPUPowerPolicy
+}
+
+func (s *Store) SetGPUPowerPolicy(policy protocol.GPUPowerPolicy) error {
+	if policy.MaxPowerW < 0 || policy.MaxPowerW > 600 {
+		return errors.New("maximum GPU power must be between 0 and 600 watts per GPU")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.GPUPowerPolicy == policy {
+		return nil
+	}
+	s.state.GPUPowerPolicy = policy
+	for _, rig := range s.state.Rigs {
+		if len(rig.Metrics.GPUs) != 0 {
+			rig.Desired.Revision++
+		}
+	}
+	s.recordLocked("update", "gpu-power-policy", "controller", map[string]any{"max_power_w": policy.MaxPowerW})
+	return s.saveLocked()
+}
+
+func applyGPUPowerPolicyToProfile(profile protocol.OverclockProfile, maximum int, gpus []protocol.GPU) protocol.OverclockProfile {
+	if maximum <= 0 || len(gpus) == 0 {
+		return profile
+	}
+	if profile.ID == "" {
+		profile.ID = "gpu-power-policy"
+		profile.Name = "Controller GPU power policy"
+		profile.Vendor = gpus[0].Vendor
+	}
+	if profile.Vendor == "" {
+		profile.Vendor = gpus[0].Vendor
+	}
+	settings := make([]protocol.GPUOverclock, 0, len(profile.Settings)+1)
+	hasWildcard := false
+	for _, setting := range profile.Settings {
+		if setting.Selector == "*" {
+			hasWildcard = true
+		}
+		if setting.PowerLimitW == 0 || setting.PowerLimitW > maximum {
+			setting.PowerLimitW = maximum
+		}
+		settings = append(settings, setting)
+	}
+	if !hasWildcard {
+		settings = append([]protocol.GPUOverclock{{Selector: "*", PowerLimitW: maximum}}, settings...)
+	}
+	profile.Settings = settings
+	return profile
+}
+
+func (s *Store) resolveWorkloadLocked(rig *storedRig, sheet protocol.FlightSheet) protocol.ResolvedWorkload {
+	result := protocol.ResolvedWorkload{
+		Coin: sheet.Coin, Algorithm: sheet.Algorithm,
+		Miner:      s.state.Miners[sheet.MinerID],
+		Wallet:     s.state.Wallets[sheet.WalletID],
+		Pool:       s.state.Pools[sheet.PoolID],
+		WorkerName: sheet.WorkerName,
+	}
+	if sheet.PoolURLOverride != "" {
+		result.Pool.URL = sheet.PoolURLOverride
+	}
+	if sheet.PoolPasswordOverride != "" {
+		result.Pool.Password = sheet.PoolPasswordOverride
+	}
+	if result.Miner.CatalogID == "srbminer-multi" {
+		if sheet.SecondaryCoin == "" {
+			result.Miner.DefaultArguments = srbSingleWorkloadArguments(sheet.DeviceType, sheet.Algorithm, result.Pool, result.Wallet, sheet.WalletTemplate)
+		} else {
+			secondaryWallet := s.state.Wallets[sheet.SecondaryWalletID]
+			secondaryPool := s.state.Pools[sheet.SecondaryPoolID]
+			result.Miner.DefaultArguments = append(
+				srbWorkloadArguments(sheet.DeviceType, sheet.Algorithm, result.Pool, result.Wallet, sheet.WalletTemplate),
+				srbWorkloadArguments(sheet.SecondaryDeviceType, sheet.SecondaryAlgorithm, secondaryPool, secondaryWallet, "")...,
+			)
+		}
+		result.Miner.DefaultArguments = append(result.Miner.DefaultArguments,
+			"--api-enable", "--api-port", "21550", "--api-rig-name", "{WORKER}",
+		)
+		result.Miner.ExtraArguments = nil
+	} else if sheet.Algorithm != "" {
+		algorithm := catalogAlgorithmForCoin(result.Miner.CatalogID, sheet.Coin, sheet.Algorithm)
+		result.Algorithm = algorithm
+		result.Miner.Algorithm = algorithm
+		if entry, ok := catalogEntry(result.Miner.CatalogID); ok && entry.AlgorithmFlag != "" {
+			if result.Miner.CatalogID == "miniz" {
+				algorithm = miniZAlgorithmParameter(algorithm)
+			}
+			result.Miner.ExtraArguments = append(append([]string(nil), result.Miner.ExtraArguments...), entry.AlgorithmFlag, algorithm)
+		}
+	}
+	if result.Miner.CatalogID == "epic-miner" && !hasArgument(result.Miner.DefaultArguments, "--stratum-login") &&
+		!hasArgument(result.Miner.ExtraArguments, "--stratum-login") && !hasArgument(sheet.ExtraArguments, "--stratum-login") {
+		result.Miner.DefaultArguments = append(append([]string(nil), result.Miner.DefaultArguments...),
+			"--stratum-login", "{STRATUM_LOGIN}",
+		)
+	}
+	if sheet.WalletTemplate != "" {
+		workerName := sheet.WorkerName
+		if workerName == "" {
+			workerName = rig.Rig.Name
+		}
+		result.MiningUser = renderWalletTemplate(sheet.WalletTemplate, result.Wallet.Address, workerName)
+		for index, argument := range result.Miner.DefaultArguments {
+			result.Miner.DefaultArguments[index] = strings.ReplaceAll(argument, "{WALLET}.{WORKER}", "{WALLET}")
+		}
+	}
+	result.Miner.ExtraArguments = append(result.Miner.ExtraArguments, sheet.ExtraArguments...)
+	return result
+}
+
+func miniZAlgorithmParameter(algorithm string) string {
+	left, right, ok := strings.Cut(algorithm, ".")
+	if !ok || left == "" || right == "" {
+		return algorithm
+	}
+	for _, part := range []string{left, right} {
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return algorithm
+			}
+		}
+	}
+	return left + "," + right
+}
+
+func hasArgument(arguments []string, name string) bool {
+	for _, argument := range arguments {
+		if argument == name || strings.HasPrefix(argument, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func validMiningEndpoint(raw string) bool {
@@ -482,7 +668,7 @@ func validMiningEndpoint(raw string) bool {
 		return false
 	}
 	switch parsed.Scheme {
-	case "stratum+tcp", "stratum+ssl", "stratum+tls", "stratum+tcps", "http", "https", "ws", "wss":
+	case "stratum+tcp", "stratum+ssl", "stratum+tls", "stratum+tcps", "stratum1+tcp", "stratum1+ssl", "stratum1+tls", "stratum1+tcps", "http", "https", "ws", "wss":
 		return true
 	default:
 		return false
@@ -611,6 +797,11 @@ func (s *Store) DeleteResource(kind, id string) error {
 		if _, ok := s.state.FlightSheets[id]; !ok {
 			return ErrNotFound
 		}
+		for _, sheet := range s.state.FlightSheets {
+			if sheet.FallbackFlightSheetID == id {
+				return errors.New("flight sheet is used as an automatic fallback")
+			}
+		}
 		for _, rig := range s.state.Rigs {
 			if rig.Desired.FlightSheetID == id {
 				return errors.New("flight sheet is assigned to a worker")
@@ -658,7 +849,8 @@ func (s *Store) bumpWorkersForResourceLocked(kind, id string) {
 	for _, rig := range s.state.Rigs {
 		switch kind {
 		case "flight-sheet":
-			if rig.Desired.FlightSheetID == id {
+			sheet, assigned := s.state.FlightSheets[rig.Desired.FlightSheetID]
+			if rig.Desired.FlightSheetID == id || (assigned && sheet.FallbackFlightSheetID == id) {
 				rig.Desired.Revision++
 			}
 		case "overclock-profile":
@@ -670,9 +862,10 @@ func (s *Store) bumpWorkersForResourceLocked(kind, id string) {
 			if !ok {
 				continue
 			}
-			if (kind == "wallet" && (sheet.WalletID == id || sheet.SecondaryWalletID == id)) ||
-				(kind == "pool" && (sheet.PoolID == id || sheet.SecondaryPoolID == id)) ||
-				(kind == "miner" && sheet.MinerID == id) {
+			fallback := s.state.FlightSheets[sheet.FallbackFlightSheetID]
+			if (kind == "wallet" && (sheet.WalletID == id || sheet.SecondaryWalletID == id || fallback.WalletID == id || fallback.SecondaryWalletID == id)) ||
+				(kind == "pool" && (sheet.PoolID == id || sheet.SecondaryPoolID == id || fallback.PoolID == id || fallback.SecondaryPoolID == id)) ||
+				(kind == "miner" && (sheet.MinerID == id || fallback.MinerID == id)) {
 				rig.Desired.Revision++
 			}
 		}

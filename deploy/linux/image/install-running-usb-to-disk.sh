@@ -10,6 +10,8 @@ usage() {
   exit 2
 }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run as root"
+[[ -s /etc/minerdash/agent.json && -s /var/lib/minerdash/identity.json ]] ||
+  die "enroll this rig before transferring its installation to an internal drive"
 target= confirmation=
 while (($#)); do
   case "$1" in
@@ -92,20 +94,17 @@ trap cleanup EXIT
 mount "$target_root" "$mount_point"
 [[ -d "$mount_point/etc" && -d "$mount_point/var/lib" ]] ||
   die "selected cloned partition is not a Linux root filesystem"
-
-rm -f -- "$mount_point/etc/minerdash/agent.json"
-rm -f -- "$mount_point/var/lib/minerdash/identity.json"
-rm -f -- "$mount_point/etc/ssh/ssh_host_ecdsa_key" "$mount_point/etc/ssh/ssh_host_ecdsa_key.pub"
-rm -f -- "$mount_point/etc/ssh/ssh_host_ed25519_key" "$mount_point/etc/ssh/ssh_host_ed25519_key.pub"
-rm -f -- "$mount_point/etc/ssh/ssh_host_rsa_key" "$mount_point/etc/ssh/ssh_host_rsa_key.pub"
-: >"$mount_point/etc/machine-id"
-rm -f -- "$mount_point/var/lib/dbus/machine-id"
-printf '%s\n' minerdash-template >"$mount_point/etc/hostname"
-install -o root -g root -m 0600 /dev/null "$mount_point/etc/minerdash/image-first-boot"
+cmp -s /etc/minerdash/agent.json "$mount_point/etc/minerdash/agent.json" ||
+  die "cloned target does not preserve the enrolled agent configuration"
+cmp -s /var/lib/minerdash/identity.json "$mount_point/var/lib/minerdash/identity.json" ||
+  die "cloned target does not preserve the enrolled rig identity"
 sync
 cleanup
 trap - EXIT
 
+rm -f -- /etc/minerdash/agent.json /var/lib/minerdash/identity.json
+rm -f -- /etc/systemd/system/multi-user.target.wants/minerdash-agent.service
+rm -f -- /etc/systemd/system/multi-user.target.wants/minerdash-first-boot.service
 echo "Installed to $target. Shut down, remove the USB, and boot the target disk."
-echo "The next boot creates unique host keys and requires fresh MinerDash enrollment."
+echo "The enrolled rig identity was transferred to the internal disk; this USB must be paired again before reuse."
 echo "The running USB root remains read-only; reboot or power off now."

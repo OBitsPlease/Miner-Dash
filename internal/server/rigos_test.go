@@ -56,6 +56,27 @@ func TestRigOSCatalogInstallAndImageStatus(t *testing.T) {
 	if wildRigCount != 1 {
 		t.Fatalf("concurrent catalog installs created %d definitions", wildRigCount)
 	}
+	trex, err := store.InstallCatalogMiner("trex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trex.Version != "package-required" || !trex.ManagedBinary || trex.BinarySHA256 != "" {
+		t.Fatalf("manual T-Rex definition = %#v", trex)
+	}
+	status = store.RigOSStatus()
+	trexFound := false
+	for _, entry := range status.Miners {
+		if entry.ID != "trex" {
+			continue
+		}
+		trexFound = true
+		if !entry.AutomaticInstall || entry.PackageReady || entry.InstalledMinerID != trex.ID {
+			t.Fatalf("T-Rex catalog status = %#v", entry)
+		}
+	}
+	if !trexFound {
+		t.Fatal("T-Rex catalog entry not found")
+	}
 	miner.Version = "1.0.0"
 	miner.CatalogID = ""
 	updated, err := store.SaveMiner(miner)

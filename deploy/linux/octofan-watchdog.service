@@ -1,0 +1,9 @@
+[Unit]
+Description=Feed Octominer fan-board hardware watchdog (prevents 25-minute resets)
+After=systemd-udevd.service
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/sbin/octofan-watchdog.py run
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
